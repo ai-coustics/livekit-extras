@@ -11,7 +11,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "ai-coustics-livekit-plugin"
+name = "ai-coustics-livekit-extras"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -17,7 +17,7 @@ from .log import log_fields, logger
 from .processor import _license_key, _pcm16_to_float32
 
 _DEFAULT_ANALYSIS_INTERVAL = 5.0
-_METER = metrics.get_meter("ai-coustics-livekit-plugin")
+_METER = metrics.get_meter("ai-coustics-livekit-extras")
 _ANALYSIS_COUNT = _METER.create_counter(
     "ai_coustics.analyzer.analysis",
     description="Number of ai-coustics buffered audio analyses",
