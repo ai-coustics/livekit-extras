@@ -1,4 +1,4 @@
-# ai-coustics plugins for LiveKit Agents
+# ai-coustics extras for LiveKit Agents
 
 This repository contains the ai-coustics-maintained Python and Node.js integrations for
 [LiveKit Agents](https://docs.livekit.io/agents/). They are thin wrappers around the public
@@ -30,8 +30,8 @@ lifecycle, observability, and error recovery.
 
 | Runtime | Package | Documentation |
 | --- | --- | --- |
-| Python | `ai-coustics-livekit-plugin` | [Installation and usage](python/README.md) |
-| Node.js | `@ai-coustics/livekit-plugin` | [Installation and usage](node/README.md) |
+| Python | `ai-coustics-livekit-extras` | [Installation and usage](python/README.md) |
+| Node.js | `@ai-coustics/livekit-extras` | [Installation and usage](node/README.md) |
 
 The runtime guides cover migration from the official plugins, model provisioning, AgentSession
 integration, Processor enhancement settings, VAD parameters, authentication, and operational
