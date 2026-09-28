@@ -11,7 +11,7 @@ from .processor_context import ProcessorContext
 from .vad import VAD, VADParameters, VADProcessor
 
 try:
-    __version__ = version("ai-coustics-livekit-plugin")
+    __version__ = version("ai-coustics-livekit-extras")
 except PackageNotFoundError:  # pragma: no cover - source tree without installation
     __version__ = "0.0.0"
 

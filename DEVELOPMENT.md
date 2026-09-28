@@ -105,7 +105,7 @@ file-path API.
 
 Node has the same model-selection problem plus a discovery limitation. The standalone LiveKit CLI
 only scans `node_modules/@livekit/agents-plugin-*`, so it does not import
-`@ai-coustics/livekit-plugin`; registering a `Plugin.downloadFiles()` hook in our package would not
+`@ai-coustics/livekit-extras`; registering a `Plugin.downloadFiles()` hook in our package would not
 make the modern command discover it.
 
 A future implementation needs both an explicit, build-time source of model IDs and a stable way
@@ -371,17 +371,17 @@ a release:
    ```
 
 The release workflow verifies that the tag points to a commit on `main` and matches both package
-versions. It then builds both distributions, publishes `ai-coustics-livekit-plugin` to PyPI and
-`@ai-coustics/livekit-plugin` to npm, and creates a GitHub release containing all distribution
+versions. It then builds both distributions, publishes `ai-coustics-livekit-extras` to PyPI and
+`@ai-coustics/livekit-extras` to npm, and creates a GitHub release containing all distribution
 artifacts. The GitHub release is created only after both registry publications succeed.
 
 Repository and registry configuration required by the publish jobs:
 
 - A GitHub `publish` environment, restricted to `*.*.*` tags, optionally with required reviewers.
-- A PyPI trusted publisher for `ai-coustics-livekit-plugin`, restricted to this repository,
+- A PyPI trusted publisher for `ai-coustics-livekit-extras`, restricted to this repository,
   `release.yml`, and the `publish` environment. The publish job authenticates over OIDC and
   stores no PyPI token.
-- An npm trusted publisher for `@ai-coustics/livekit-plugin`, restricted to this repository,
+- An npm trusted publisher for `@ai-coustics/livekit-extras`, restricted to this repository,
   `.github/workflows/release.yml`, and the `publish` environment. npm only allows a trusted
   publisher on a package that already exists, so the first release authenticates with an
   `NPM_TOKEN` secret in the `publish` environment. Configure the trusted publisher and delete

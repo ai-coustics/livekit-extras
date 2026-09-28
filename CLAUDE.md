@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Two independently built packages that are functional mirrors of each other:
 
-- `python/` — `ai-coustics-livekit-plugin`, importable as `livekit.plugins.ai_coustics` (namespace
+- `python/` — `ai-coustics-livekit-extras`, importable as `livekit.plugins.ai_coustics` (namespace
   package under `python/src/livekit/plugins/ai_coustics/`), built on `aic-sdk` 3.1.
-- `node/` — `@ai-coustics/livekit-plugin` (`node/src/`), built on `@ai-coustics/aic-sdk` 0.23.
+- `node/` — `@ai-coustics/livekit-extras` (`node/src/`), built on `@ai-coustics/aic-sdk` 0.23.
 
 Run all commands from inside `python/` or `node/`; there is no root-level build. The two packages
 are released in lockstep and must always carry the same version.

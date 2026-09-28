@@ -1,4 +1,4 @@
-# ai-coustics LiveKit plugin for Node.js
+# ai-coustics LiveKit extras for Node.js
 
 Audio enhancement, voice activity detection, and audio-quality analysis for LiveKit Agents, backed by the public
 `@ai-coustics/aic-sdk` package.
@@ -24,7 +24,7 @@ Audio enhancement, voice activity detection, and audio-quality analysis for Live
 
 ```bash
 npm uninstall @livekit/plugins-ai-coustics
-npm install @ai-coustics/livekit-plugin
+npm install @ai-coustics/livekit-extras
 export AIC_SDK_LICENSE=...
 ```
 
@@ -52,7 +52,7 @@ const vad = aic.vad();
 After loading the SDK models as described below:
 
 ```ts
-import { FrameProcessorChain, Processor, VAD } from "@ai-coustics/livekit-plugin";
+import { FrameProcessorChain, Processor, VAD } from "@ai-coustics/livekit-extras";
 
 const processor = new Processor({ model: enhancementModel });
 const vad = new VAD({ model: vadModel });
@@ -69,7 +69,7 @@ over; obtain an ai-coustics SDK license before migrating.
 Download models during deployment or container setup:
 
 ```ts
-import { Model } from "@ai-coustics/livekit-plugin";
+import { Model } from "@ai-coustics/livekit-extras";
 
 const enhancementPath = Model.download("quail-vf-2.2-l-16khz", "./models");
 const vadPath = Model.download("vad-2.1-xxs-16khz", "./models");
@@ -91,7 +91,7 @@ Create a `Processor` and `VAD` for each agent session:
 
 ```ts
 import { voice } from "@livekit/agents";
-import { FrameProcessorChain, Processor, VAD } from "@ai-coustics/livekit-plugin";
+import { FrameProcessorChain, Processor, VAD } from "@ai-coustics/livekit-extras";
 
 const processor = new Processor({ model: enhancementModel });
 const vad = new VAD({ model: vadModel });
@@ -120,7 +120,7 @@ use `noiseCancellation: processor`.
 Create an `Analyzer`, install its collector in RoomIO's audio path, and subscribe to its results:
 
 ```ts
-import { Analyzer } from "@ai-coustics/livekit-plugin";
+import { Analyzer } from "@ai-coustics/livekit-extras";
 
 const analyzer = new Analyzer({
   model: analysisModel,
@@ -148,7 +148,7 @@ Use `FrameProcessorChain` to run any number of processors in the same RoomIO aud
 example, this runs VAD inference and analysis on the raw input before enhancement:
 
 ```ts
-import { FrameProcessorChain } from "@ai-coustics/livekit-plugin";
+import { FrameProcessorChain } from "@ai-coustics/livekit-extras";
 
 const frameProcessor = new FrameProcessorChain(
   vad.processor,
@@ -176,7 +176,7 @@ Set the enhancement level through the Processor context, and configure all SDK V
 the VAD factory:
 
 ```ts
-import { ProcessorParameter } from "@ai-coustics/livekit-plugin";
+import { ProcessorParameter } from "@ai-coustics/livekit-extras";
 
 processor.getContext().setParameter(ProcessorParameter.EnhancementLevel, 0.8);
 vad.setParameters({

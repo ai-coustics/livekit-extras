@@ -1,12 +1,12 @@
 {
-  "name": "@ai-coustics/livekit-plugin",
+  "name": "@ai-coustics/livekit-extras",
   "version": "0.1.0",
   "description": "ai-coustics noise cancellation and VAD for LiveKit Agents",
   "license": "Apache-2.0",
   "author": "ai-coustics GmbH",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ai-coustics/livekit-plugins.git"
+    "url": "git+https://github.com/ai-coustics/livekit-extras.git"
   },
   "type": "module",
   "main": "dist/index.cjs",

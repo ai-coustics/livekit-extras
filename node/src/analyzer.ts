@@ -19,7 +19,7 @@ import {
 } from "./sdk.js";
 
 const DEFAULT_ANALYSIS_INTERVAL_SECONDS = 5;
-const meter = metrics.getMeter("ai-coustics-livekit-plugin");
+const meter = metrics.getMeter("ai-coustics-livekit-extras");
 const analysisCount = meter.createCounter("ai_coustics.analyzer.analysis", {
   description: "Number of ai-coustics buffered audio analyses",
 });

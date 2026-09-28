@@ -3,7 +3,7 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ai-coustics-livekit-plugin"
+name = "ai-coustics-livekit-extras"
 version = "0.1.0"
 description = "ai-coustics noise cancellation for LiveKit Agents"
 readme = "README.md"

@@ -1,4 +1,4 @@
-# ai-coustics LiveKit plugin for Python
+# ai-coustics LiveKit extras for Python
 
 Audio enhancement, voice activity detection, and audio-quality analysis for LiveKit Agents, backed by the public
 `aic-sdk` package.
@@ -23,7 +23,7 @@ Audio enhancement, voice activity detection, and audio-quality analysis for Live
 
 ```bash
 pip uninstall livekit-plugins-ai-coustics
-pip install ai-coustics-livekit-plugin
+pip install ai-coustics-livekit-extras
 export AIC_SDK_LICENSE=...
 ```
 
