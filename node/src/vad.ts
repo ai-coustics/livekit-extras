@@ -68,8 +68,8 @@ interface FrameMetadata {
 export class VADProcessor extends FrameProcessor<AudioFrame> {
   private readonly model: Model;
   private readonly modelId: string;
-  private nativeVad: AicVad | null;
-  private context: VadContext | null;
+  private readonly nativeVad: AicVad;
+  private readonly context: VadContext;
   private processorEnabled = true;
   private closed = false;
   private format: [number, number] | null = null;
@@ -98,7 +98,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
   }
 
   get sdkContext(): VadContext {
-    if (!this.context) {
+    if (this.closed) {
       throw new Error("Cannot get context from a closed ai-coustics VAD processor");
     }
     return this.context;
@@ -132,7 +132,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
   }
 
   process(frame: AudioFrame): AudioFrame {
-    if (!this.processorEnabled || !this.nativeVad || !this.context) return frame;
+    if (!this.processorEnabled) return frame;
 
     let metadata: FrameMetadata;
     try {
@@ -148,7 +148,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
   }
 
   reset(): void {
-    this.context?.reset();
+    if (!this.closed) this.context.reset();
     this.format = null;
     this.inferenceBuffer = new Int16Array(0);
     this.predictionDelaySamples = 0;
@@ -160,17 +160,13 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
     if (this.closed) return;
     this.closed = true;
     this.processorEnabled = false;
-    const nativeVad = this.nativeVad;
-    this.nativeVad = null;
-    this.context = null;
     this.inferenceBuffer = new Int16Array(0);
-    nativeVad?.terminateSession();
+    this.nativeVad.terminateSession();
   }
 
   private processFrame(frame: AudioFrame): readonly InferenceResult[] {
     const nativeVad = this.nativeVad;
     const context = this.context;
-    if (!nativeVad || !context) return [];
     const mono = monoPcm16(frame);
 
     const inferenceBlockSize = this.model.getOptimalBlockSize(frame.sampleRate);

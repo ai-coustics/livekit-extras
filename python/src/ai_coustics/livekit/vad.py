@@ -71,8 +71,8 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
         self._model = model
         self._model_id = model.get_id()
-        self._native_vad: aic_sdk.Vad | None = native_vad
-        self._context: aic_sdk.VadContext | None = native_vad.get_context()
+        self._native_vad = native_vad
+        self._context = native_vad.get_context()
         self._enabled = True
         self._closed = False
         self._stream_info: dict[str, str] = {}
@@ -97,12 +97,12 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
     @property
     def context(self) -> aic_sdk.VadContext:
-        if self._context is None:
+        if self._closed:
             raise RuntimeError("Cannot get context from a closed ai-coustics VAD processor")
         return self._context
 
     def _reset(self) -> None:
-        if self._context is not None:
+        if not self._closed:
             self._context.reset()
         self._format = None
         self._inference_buffer.clear()
@@ -132,7 +132,7 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             self._stream_info = {}
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
-        if not self._enabled or self._native_vad is None or self._context is None:
+        if not self._enabled:
             return frame
 
         try:
@@ -152,7 +152,6 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     def _process_frame(self, frame: rtc.AudioFrame) -> list[_InferenceResult]:
         native_vad = self._native_vad
         context = self._context
-        assert native_vad is not None and context is not None
         mono = _mono_pcm16(frame)
 
         inference_block_size = self._model.get_optimal_block_size(frame.sample_rate)
@@ -262,12 +261,8 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             return
         self._closed = True
         self._enabled = False
-        native_vad = self._native_vad
-        self._native_vad = None
-        self._context = None
         self._inference_buffer.clear()
-        if native_vad is not None:
-            native_vad.terminate_session()
+        self._native_vad.terminate_session()
 
 
 class VAD(agents.vad.VAD):
