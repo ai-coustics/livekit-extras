@@ -98,7 +98,9 @@ the model's fixed prediction delay conceptually distinct from processing backlog
 ## Conventions
 
 **Parity.** A change to one runtime almost always needs the mirrored change in the other, including
-tests. The file layouts intentionally correspond one-to-one.
+tests. The file layouts intentionally correspond one-to-one. VAD event semantics are pinned by
+`testdata/vad_scenarios.json`, which both unit suites replay; change that file, not per-runtime
+assertions.
 
 **Logging** (full rules in `DEVELOPMENT.md`). Messages are `Component: event`
 (`VAD: inference falling behind realtime`). Every record carries `plugin=ai-coustics` and
