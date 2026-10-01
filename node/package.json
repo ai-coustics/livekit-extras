@@ -1,7 +1,7 @@
 {
   "name": "@ai-coustics/livekit-extras",
   "version": "0.1.0",
-  "description": "ai-coustics noise cancellation and VAD for LiveKit Agents",
+  "description": "ai-coustics voice activity detection and audio analysis for LiveKit Agents",
   "license": "Apache-2.0",
   "author": "ai-coustics GmbH",
   "repository": {
@@ -33,13 +33,13 @@
   "scripts": {
     "build": "tsup",
     "check": "tsc --noEmit",
-    "test": "vitest run test/analyzer.test.ts test/frame_processor_chain.test.ts test/processor.test.ts test/vad.test.ts",
+    "test": "vitest run test/analyzer.test.ts test/vad.test.ts",
     "test:integration": "vitest run test/integration.test.ts",
     "test:e2e": "vitest run test/e2e-room.test.ts",
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@ai-coustics/aic-sdk": "^0.23.0",
+    "@ai-coustics/aic-sdk": "^0.25.0",
     "@livekit/typed-emitter": "^3.0.0",
     "@opentelemetry/api": "^1.9.0"
   },

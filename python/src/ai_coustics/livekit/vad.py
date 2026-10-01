@@ -7,11 +7,10 @@ from dataclasses import dataclass
 
 import aic_sdk
 import numpy as np
-
 from livekit import agents, rtc
 
+from .common import _license_key, _pcm16_to_float32
 from .log import log_fields, logger
-from .processor import _license_key, _pcm16_to_float32
 
 _FRAME_USERDATA_VAD_ATTRIBUTE = "ai_coustics.vad"
 _SLOW_WARNING_INTERVAL = 10.0
@@ -281,17 +280,7 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         self._context = None
         self._inference_buffer.clear()
         if native_vad is not None:
-            try:
-                native_vad.terminate_session()
-            except Exception as error:
-                logger.error(
-                    "VAD: session termination failed",
-                    extra=self._diagnostic_fields(
-                        error_type=type(error).__name__,
-                        error_message=str(error),
-                    ),
-                    exc_info=(type(error), error, error.__traceback__),
-                )
+            native_vad.terminate_session()
 
 
 class VAD(agents.vad.VAD):
@@ -531,7 +520,7 @@ class VADStream(agents.vad.VADStream):
                 if self._missing_metadata_frames == _MISSING_METADATA_WARNING_FRAMES:
                     logger.error(
                         "VAD: no inference metadata found; pass vad.processor as RoomIO "
-                        "noise_cancellation (or place it first in FrameProcessorChain)",
+                        "noise_cancellation",
                         extra=self._processor._diagnostic_fields(
                             missing_metadata_frames=self._missing_metadata_frames,
                         ),

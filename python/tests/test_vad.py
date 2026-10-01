@@ -7,9 +7,9 @@ from typing import cast
 import aic_sdk
 import numpy as np
 import pytest
-
 from livekit import agents, rtc
-from livekit.plugins.ai_coustics import VAD, FrameProcessorChain, VADParameters
+
+from ai_coustics.livekit import VAD, VADParameters
 
 native_calls: list[tuple[str, int | None]] = []
 
@@ -117,11 +117,11 @@ def fake_native_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeVadContext.parameter_errors.clear()
     native_calls.clear()
     monkeypatch.setattr(
-        "livekit.plugins.ai_coustics.vad.aic_sdk.set_sdk_id",
+        "ai_coustics.livekit.vad.aic_sdk.set_sdk_id",
         lambda sdk_id: native_calls.append(("sdk_id", sdk_id)),
     )
     monkeypatch.setattr(
-        "livekit.plugins.ai_coustics.vad.aic_sdk.Vad",
+        "ai_coustics.livekit.vad.aic_sdk.Vad",
         FakeVad,
     )
 
@@ -242,7 +242,7 @@ def test_wraps_native_vad_construction_errors(monkeypatch: pytest.MonkeyPatch) -
     def fail_vad(*_args: object, **_kwargs: object) -> None:
         raise sdk_error
 
-    monkeypatch.setattr("livekit.plugins.ai_coustics.vad.aic_sdk.Vad", fail_vad)
+    monkeypatch.setattr("ai_coustics.livekit.vad.aic_sdk.Vad", fail_vad)
 
     with pytest.raises(RuntimeError, match="Failed to create ai-coustics VAD") as exc_info:
         create_vad()
@@ -428,7 +428,7 @@ async def test_warns_for_sustained_inference_backlog_with_structured_context(
         nonlocal clock
         clock += durations.popleft()
 
-    monkeypatch.setattr("livekit.plugins.ai_coustics.vad.time.perf_counter", perf_counter)
+    monkeypatch.setattr("ai_coustics.livekit.vad.time.perf_counter", perf_counter)
     vad = create_vad(model=FakeModel(sample_rate=100, block_size=10))
     stream = vad.stream()
     native = FakeVad.instances[0]
@@ -436,7 +436,7 @@ async def test_warns_for_sustained_inference_backlog_with_structured_context(
     native.predictions.extend([(0.0, False)] * 3)
 
     push_processed(vad, stream, make_frame(np.arange(30, dtype=np.int16), sample_rate=100))
-    with caplog.at_level("WARNING", logger="livekit.plugins.ai_coustics"):
+    with caplog.at_level("WARNING", logger="ai_coustics.livekit"):
         await collect_events(stream)
 
     warnings = [
@@ -644,7 +644,7 @@ async def test_missing_metadata_log_uses_standard_vad_context(
 
 
 @pytest.mark.asyncio
-async def test_processor_chain_runs_vad_before_audio_replacement() -> None:
+async def test_vad_audio_survives_downstream_audio_replacement() -> None:
     class MutingProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         enabled = True
 
@@ -664,10 +664,9 @@ async def test_processor_chain_runs_vad_before_audio_replacement() -> None:
     stream = vad.stream()
     native = FakeVad.instances[0]
     native.predictions.append((0.9, True))
-    chain = FrameProcessorChain(vad.processor, MutingProcessor())
     raw = np.array([1000, 2000, 3000, 4000], dtype=np.int16)
 
-    output = chain._process(make_frame(raw))
+    output = MutingProcessor()._process(vad.processor._process(make_frame(raw)))
     stream.push_frame(output)
     events = await collect_events(stream)
 

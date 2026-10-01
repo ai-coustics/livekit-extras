@@ -1,13 +1,12 @@
 import { log } from "@livekit/agents";
 
-export type LogComponent = "analyzer" | "collector" | "logger" | "processor" | "vad";
+export type LogComponent = "analyzer" | "collector" | "logger" | "vad";
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 const componentLabels: Record<LogComponent, string> = {
   analyzer: "Analyzer",
   collector: "Collector",
   logger: "Logger",
-  processor: "Processor",
   vad: "VAD",
 };
 

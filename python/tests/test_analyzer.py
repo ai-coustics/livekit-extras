@@ -9,10 +9,10 @@ from typing import cast
 import aic_sdk
 import numpy as np
 import pytest
-
 from livekit import rtc
-from livekit.plugins.ai_coustics import AnalysisEvent, Analyzer, Collector
-from livekit.plugins.ai_coustics.analyzer import _RESULT_FIELDS
+
+from ai_coustics.livekit import AnalysisEvent, Analyzer, Collector
+from ai_coustics.livekit.analyzer import _RESULT_FIELDS
 
 
 class FakeModel:
@@ -74,16 +74,16 @@ def fake_sdk(
     collector = FakeCollector()
     analyzer = FakeNativeAnalyzer()
     sdk_ids: list[int] = []
-    monkeypatch.setattr("livekit.plugins.ai_coustics.analyzer.aic_sdk.set_sdk_id", sdk_ids.append)
+    monkeypatch.setattr("ai_coustics.livekit.analyzer.aic_sdk.set_sdk_id", sdk_ids.append)
     monkeypatch.setattr(
-        "livekit.plugins.ai_coustics.analyzer.aic_sdk.analyzer_pair",
+        "ai_coustics.livekit.analyzer.aic_sdk.analyzer_pair",
         lambda model, license_key: (collector, analyzer),
     )
 
     async def run_immediately(function: Callable[..., object], /, *args: object) -> object:
         return function(*args)
 
-    monkeypatch.setattr("livekit.plugins.ai_coustics.analyzer.asyncio.to_thread", run_immediately)
+    monkeypatch.setattr("ai_coustics.livekit.analyzer.asyncio.to_thread", run_immediately)
     return collector, analyzer, sdk_ids
 
 
@@ -105,13 +105,9 @@ def metric_instruments(monkeypatch: pytest.MonkeyPatch) -> dict[str, FakeInstrum
         "duration": FakeInstrument(),
         "score": FakeInstrument(),
     }
-    monkeypatch.setattr(
-        "livekit.plugins.ai_coustics.analyzer._ANALYSIS_COUNT", instruments["analysis"]
-    )
-    monkeypatch.setattr(
-        "livekit.plugins.ai_coustics.analyzer._INFERENCE_DURATION", instruments["duration"]
-    )
-    monkeypatch.setattr("livekit.plugins.ai_coustics.analyzer._SCORE", instruments["score"])
+    monkeypatch.setattr("ai_coustics.livekit.analyzer._ANALYSIS_COUNT", instruments["analysis"])
+    monkeypatch.setattr("ai_coustics.livekit.analyzer._INFERENCE_DURATION", instruments["duration"])
+    monkeypatch.setattr("ai_coustics.livekit.analyzer._SCORE", instruments["score"])
     return instruments
 
 
@@ -186,7 +182,7 @@ async def test_analyzes_on_interval_and_emits_without_logging_result(
     )
     analyzer.collector._process(make_frame())
 
-    with caplog.at_level(logging.INFO, logger="livekit.plugins.ai_coustics"):
+    with caplog.at_level(logging.INFO, logger="ai_coustics.livekit"):
         for _ in range(20):
             if native_analyzer.analyze_calls:
                 break

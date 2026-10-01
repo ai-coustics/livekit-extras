@@ -9,12 +9,11 @@ from typing import Literal
 
 import aic_sdk
 import numpy as np
+from livekit import rtc
 from opentelemetry import metrics
 
-from livekit import rtc
-
+from .common import _license_key, _pcm16_to_float32
 from .log import log_fields, logger
-from .processor import _license_key, _pcm16_to_float32
 
 _DEFAULT_ANALYSIS_INTERVAL = 5.0
 _METER = metrics.get_meter("ai-coustics-livekit-extras")
@@ -122,18 +121,7 @@ class Collector(rtc.FrameProcessor[rtc.AudioFrame]):
         if self._closed:
             return
         self._has_buffered_audio = False
-        try:
-            self._reset_analyzer()
-        except Exception as error:
-            logger.error(
-                "Analyzer: reset failed",
-                extra=log_fields(
-                    "analyzer",
-                    error_type=type(error).__name__,
-                    error_message=str(error),
-                ),
-                exc_info=(type(error), error, error.__traceback__),
-            )
+        self._reset_analyzer()
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
         collector = self._collector
@@ -244,13 +232,7 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
         self._native_analyzer = None
         if native_analyzer is None:
             return
-        try:
-            await asyncio.to_thread(native_analyzer.terminate_session)
-        except Exception:
-            logger.exception(
-                "Analyzer: session termination failed",
-                extra=log_fields("analyzer", model_name=self._model_id),
-            )
+        await asyncio.to_thread(native_analyzer.terminate_session)
 
     async def _analyze_once(self, native_analyzer: aic_sdk.Analyzer) -> None:
         started = time.perf_counter()

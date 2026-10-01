@@ -9,10 +9,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from livekit import api, rtc
 from livekit.agents import Agent, AgentSession, room_io
 
-from livekit import api, rtc
-from livekit.plugins import ai_coustics
+from ai_coustics import livekit as ai_coustics
 
 pytestmark = [pytest.mark.integration, pytest.mark.e2e]
 
@@ -20,7 +20,6 @@ LICENSE = os.getenv("AIC_SDK_LICENSE")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://127.0.0.1:7880")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
-MODEL_ID = os.getenv("AIC_INTEGRATION_MODEL_ID", "quail-vf-2.2-s-16khz")
 VAD_MODEL_ID = os.getenv("AIC_INTEGRATION_VAD_MODEL_ID", "vad-2.1-xxs-16khz")
 MODEL_DIR = Path(os.getenv("AIC_INTEGRATION_MODEL_DIR", "~/.cache/aic-sdk/models")).expanduser()
 
@@ -28,37 +27,6 @@ INPUT_SAMPLE_RATE = 16_000
 PUBLISH_SAMPLE_RATE = 48_000
 PUBLISH_FRAME_MS = 20
 LICENSE_GRACE_PERIOD_SECONDS = 10.0
-
-
-class ObservedProcessor(ai_coustics.Processor):
-    """Records whether real SDK processing succeeds when invoked by LiveKit RTC."""
-
-    def __init__(self, *, model: ai_coustics.Model) -> None:
-        self.created_at = time.monotonic()
-        self.calls = 0
-        self.success_times: list[float] = []
-        self.formats: set[tuple[int, int, int]] = set()
-        self.closed = False
-        super().__init__(model=model)
-
-    def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
-        self.calls += 1
-        self.formats.add((frame.sample_rate, frame.num_channels, frame.samples_per_channel))
-        output = super()._process(frame)
-        # Processor returns the original frame when it catches an SDK error and fails open.
-        if output is not frame:
-            self.success_times.append(time.monotonic())
-        return output
-
-    def _close(self) -> None:
-        self.closed = True
-        super()._close()
-
-
-@pytest.fixture(scope="module")
-def model() -> ai_coustics.Model:
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    return ai_coustics.Model.from_file(ai_coustics.Model.download(MODEL_ID, MODEL_DIR))
 
 
 @pytest.fixture(scope="module")
@@ -124,18 +92,17 @@ async def _publish_test_signal(source: rtc.AudioSource, *, until: float) -> None
 
 @pytest.mark.skipif(not LICENSE, reason="AIC_SDK_LICENSE is required")
 @pytest.mark.asyncio
-async def test_processor_and_vad_run_in_a_real_agent_room_after_license_grace_period(
-    model: ai_coustics.Model,
+async def test_vad_runs_in_a_real_agent_room_after_license_grace_period(
     vad_model: ai_coustics.Model,
 ) -> None:
     room_name = f"ai-coustics-e2e-{uuid.uuid4().hex[:12]}"
     agent_room = rtc.Room()
     publisher_room = rtc.Room()
-    processor = ObservedProcessor(model=model)
+    created_at = time.monotonic()
     detector = ai_coustics.VAD(model=vad_model)
-    frame_processor = ai_coustics.FrameProcessorChain(detector.processor, processor)
-    vad_metrics: list[object] = []
-    detector.on("metrics_collected", vad_metrics.append)
+    # LiveKit emits VAD metrics only after successful inference events.
+    metrics_times: list[float] = []
+    detector.on("metrics_collected", lambda _: metrics_times.append(time.monotonic()))
     session = AgentSession(
         vad=detector,
         turn_handling={"turn_detection": "manual"},
@@ -157,7 +124,7 @@ async def test_processor_and_vad_run_in_a_real_agent_room_after_license_grace_pe
                     sample_rate=INPUT_SAMPLE_RATE,
                     num_channels=1,
                     frame_size_ms=50,
-                    noise_cancellation=frame_processor,
+                    noise_cancellation=detector.processor,
                     auto_gain_control=False,
                 ),
                 audio_output=False,
@@ -177,25 +144,22 @@ async def test_processor_and_vad_run_in_a_real_agent_room_after_license_grace_pe
 
         # Continue beyond the SDK's authentication grace period, while guaranteeing at least
         # three seconds of actual room audio if room setup itself took unusually long.
-        stream_until = max(time.monotonic() + 3.0, processor.created_at + 12.0)
+        stream_until = max(time.monotonic() + 3.0, created_at + 12.0)
         await _publish_test_signal(source, until=stream_until)
 
-        assert processor.calls >= 20
-        assert processor.formats == {(INPUT_SAMPLE_RATE, 1, INPUT_SAMPLE_RATE // 20)}
-        assert processor.success_times
+        assert metrics_times, "AgentSession did not consume the ai-coustics VAD stream"
         assert any(
-            processed_at >= processor.created_at + LICENSE_GRACE_PERIOD_SECONDS
-            for processed_at in processor.success_times
-        ), "no SDK-processed audio was observed after the license grace period"
-        assert vad_metrics, "AgentSession did not consume the ai-coustics VAD stream"
+            observed_at >= created_at + LICENSE_GRACE_PERIOD_SECONDS
+            for observed_at in metrics_times
+        ), "no VAD inference was observed after the license grace period"
     finally:
         if session_started:
             await session.aclose()
         else:
-            processor._close()
+            detector.processor._close()
         if source is not None:
             await source.aclose()
         await publisher_room.disconnect()
         await agent_room.disconnect()
 
-    assert processor.closed, "RoomIO did not close its owned frame processor"
+    assert detector.processor._closed, "RoomIO did not close its owned frame processor"

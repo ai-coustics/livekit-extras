@@ -4,21 +4,20 @@ import {
   VADEventType,
 } from "@livekit/agents";
 import {
+  type Model,
+  Vad as AicVad,
+  type VadContext,
+  VadParameter as AicVadParameter,
+  _setSdkId as setSdkId,
+} from "@ai-coustics/aic-sdk";
+import {
   AudioFrame,
   FrameProcessor,
   type FrameProcessorStreamInfo,
 } from "@livekit/rtc-node";
 
+import { errorDetail, pcm16ToFloat32, resolveLicenseKey } from "./common.js";
 import { writeLog } from "./log.js";
-import { pcm16ToFloat32 } from "./processor.js";
-import {
-  type Model,
-  Vad as AicVad,
-  type VadContext,
-  type VadInstance,
-  VadParameter as AicVadParameter,
-  setSdkId,
-} from "./sdk.js";
 
 const FRAME_USERDATA_VAD_ATTRIBUTE = "ai_coustics.vad";
 const DEFAULT_SPEECH_HOLD_DURATION_SECONDS = 0.25;
@@ -65,25 +64,11 @@ interface FrameMetadata {
   error?: InferenceError;
 }
 
-function resolveLicenseKey(value?: string): string {
-  const key = value || process.env.AIC_SDK_LICENSE;
-  if (!key) {
-    throw new Error(
-      "An ai-coustics SDK license is required. Pass licenseKey or set AIC_SDK_LICENSE.",
-    );
-  }
-  return key;
-}
-
-function errorDetail(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** Pass-through processor that runs one SDK VAD and annotates input frames. */
 export class VADProcessor extends FrameProcessor<AudioFrame> {
   private readonly model: Model;
   private readonly modelId: string;
-  private nativeVad: VadInstance | null;
+  private nativeVad: AicVad | null;
   private context: VadContext | null;
   private processorEnabled = true;
   private closed = false;
@@ -98,7 +83,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
   constructor(model: Model, licenseKey: string) {
     super();
     setSdkId(9);
-    let nativeVad: VadInstance;
+    let nativeVad: AicVad;
     try {
       nativeVad = new AicVad(model, licenseKey);
     } catch (error) {
@@ -179,22 +164,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
     this.nativeVad = null;
     this.context = null;
     this.inferenceBuffer = new Int16Array(0);
-    if (nativeVad) {
-      try {
-        nativeVad.terminateSession();
-      } catch (error) {
-        writeLog(
-          "error",
-          "vad",
-          "session termination failed",
-          this.diagnosticFields({
-            errorType: error instanceof Error ? error.name : typeof error,
-            errorMessage: errorDetail(error),
-          }),
-          error,
-        );
-      }
-    }
+    nativeVad?.terminateSession();
   }
 
   private processFrame(frame: AudioFrame): readonly InferenceResult[] {
@@ -273,7 +243,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
       results.push({
         pcm,
         sampleRate: frame.sampleRate,
-        probability: context.rawVadProbability(),
+        probability: context.getRawVadProbability(),
         detected: context.isSpeechDetected(),
         sensitivity: context.getParameter(AicVadParameter.Sensitivity),
         speechHoldDuration: context.getParameter(
@@ -638,8 +608,7 @@ class AicVADStream extends LiveKitVADStream {
           writeLog(
             "error",
             "vad",
-            "no inference metadata found; pass vad.processor as RoomIO " +
-              "noiseCancellation (or place it first in FrameProcessorChain)",
+            "no inference metadata found; pass vad.processor as RoomIO noiseCancellation",
             this.processor.diagnosticFields({
               missingMetadataFrames: this.missingMetadataFrames,
             }),

@@ -40,7 +40,7 @@ const sdk = vi.hoisted(() => {
       return this.detected;
     }
 
-    rawVadProbability(): number {
+    getRawVadProbability(): number {
       return this.probability;
     }
 
@@ -76,6 +76,8 @@ const sdk = vi.hoisted(() => {
     getOptimalBlockSize(sampleRate: number): number {
       return Math.round((this.blockSize * sampleRate) / this.sampleRate);
     }
+
+    dispose(): void {}
   }
 
   class FakeVad {
@@ -117,12 +119,9 @@ const sdk = vi.hoisted(() => {
     }
   }
 
-  class FakeProcessor {}
-
   return {
     FakeContext,
     FakeModel,
-    FakeProcessor,
     FakeVad,
     VadParameter,
     instances,
@@ -132,14 +131,12 @@ const sdk = vi.hoisted(() => {
 
 vi.mock("@ai-coustics/aic-sdk", () => ({
   Model: sdk.FakeModel,
-  Processor: sdk.FakeProcessor,
-  ProcessorParameter: { Bypass: 0, EnhancementLevel: 1 },
   Vad: sdk.FakeVad,
   VadParameter: sdk.VadParameter,
   _setSdkId: (id: number) => sdk.nativeCalls.push(["sdk_id", id]),
 }));
 
-import { FrameProcessorChain, VAD, VADParameters } from "../src/index.js";
+import { VAD, VADParameters } from "../src/index.js";
 
 initializeLogger({ pretty: false, level: "silent" });
 
@@ -542,7 +539,7 @@ describe("VAD", () => {
     errorLog.mockRestore();
   });
 
-  it("runs VAD on original audio before a downstream processor replaces it", async () => {
+  it("keeps VAD audio when a downstream processor replaces the frame", async () => {
     const vad = new VAD({
       model: new sdk.FakeModel(16_000, 4),
       licenseKey: "test-license",
@@ -550,10 +547,9 @@ describe("VAD", () => {
     const stream = vad.stream();
     const native = sdk.instances[0]!;
     native.predictions.push([0.9, true]);
-    const chain = new FrameProcessorChain(vad.processor, new MutingProcessor());
     const raw = new Int16Array([1000, 2000, 3000, 4000]);
 
-    const output = chain.process(makeFrame(raw));
+    const output = new MutingProcessor().process(vad.processor.process(makeFrame(raw)));
     stream.pushFrame(output);
     const events = await collectEvents(stream);
 
