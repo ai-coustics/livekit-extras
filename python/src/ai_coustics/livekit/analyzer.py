@@ -8,11 +8,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 import aic_sdk
-import numpy as np
 from livekit import rtc
 from opentelemetry import metrics
 
-from .common import _license_key, _pcm16_to_float32
+from .common import _license_key, _mono_pcm16, _pcm16_to_float32
 from .log import log_fields, logger
 
 _DEFAULT_ANALYSIS_INTERVAL = 5.0
@@ -144,20 +143,7 @@ class Collector(rtc.FrameProcessor[rtc.AudioFrame]):
                 )
                 self._format = stream_format
 
-            samples = _pcm16_to_float32(frame.data)
-            expected_samples = frame.samples_per_channel * frame.num_channels
-            if samples.size != expected_samples:
-                raise ValueError(
-                    f"AudioFrame contains {samples.size} samples, expected {expected_samples}"
-                )
-
-            channels = samples.reshape(frame.samples_per_channel, frame.num_channels)
-            mono = (
-                channels[:, 0].copy()
-                if frame.num_channels == 1
-                else channels.mean(axis=1, dtype=np.float32)
-            )
-            collector.buffer(mono)
+            collector.buffer(_pcm16_to_float32(_mono_pcm16(frame).data))
             self._has_buffered_audio = True
         except Exception:
             logger.exception(

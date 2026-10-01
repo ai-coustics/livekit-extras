@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 import numpy as np
+from livekit import rtc
 
 
 def _license_key(value: str | None) -> str:
@@ -12,6 +13,17 @@ def _license_key(value: str | None) -> str:
             "An ai-coustics SDK license is required. Pass license_key or set AIC_SDK_LICENSE."
         )
     return key
+
+
+def _mono_pcm16(frame: rtc.AudioFrame) -> np.ndarray:
+    samples = np.frombuffer(frame.data, dtype=np.int16)
+    expected_samples = frame.samples_per_channel * frame.num_channels
+    if samples.size != expected_samples:
+        raise ValueError(f"AudioFrame contains {samples.size} samples, expected {expected_samples}")
+    if frame.num_channels == 1:
+        return samples
+    channels = samples.reshape(frame.samples_per_channel, frame.num_channels)
+    return np.rint(channels.mean(axis=1, dtype=np.float32)).astype(np.int16)
 
 
 def _pcm16_to_float32(data: memoryview) -> np.ndarray:

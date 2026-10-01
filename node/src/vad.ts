@@ -16,7 +16,7 @@ import {
   type FrameProcessorStreamInfo,
 } from "@livekit/rtc-node";
 
-import { errorDetail, pcm16ToFloat32, resolveLicenseKey } from "./common.js";
+import { errorDetail, monoPcm16, pcm16ToFloat32, resolveLicenseKey } from "./common.js";
 import { writeLog } from "./log.js";
 
 const FRAME_USERDATA_VAD_ATTRIBUTE = "ai_coustics.vad";
@@ -171,25 +171,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
     const nativeVad = this.nativeVad;
     const context = this.context;
     if (!nativeVad || !context) return [];
-
-    const expectedSamples = frame.samplesPerChannel * frame.channels;
-    if (frame.data.length !== expectedSamples) {
-      throw new Error(
-        `AudioFrame contains ${frame.data.length} samples, expected ${expectedSamples}`,
-      );
-    }
-    const mono = new Int16Array(frame.samplesPerChannel);
-    if (frame.channels === 1) {
-      mono.set(frame.data);
-    } else {
-      for (let sample = 0; sample < frame.samplesPerChannel; sample += 1) {
-        let sum = 0;
-        for (let channel = 0; channel < frame.channels; channel += 1) {
-          sum += frame.data[sample * frame.channels + channel]!;
-        }
-        mono[sample] = Math.round(sum / frame.channels);
-      }
-    }
+    const mono = monoPcm16(frame);
 
     const inferenceBlockSize = this.model.getOptimalBlockSize(frame.sampleRate);
     const nextFormat: [number, number] = [frame.sampleRate, inferenceBlockSize];

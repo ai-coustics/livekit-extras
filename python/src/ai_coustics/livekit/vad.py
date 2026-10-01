@@ -9,7 +9,7 @@ import aic_sdk
 import numpy as np
 from livekit import agents, rtc
 
-from .common import _license_key, _pcm16_to_float32
+from .common import _license_key, _mono_pcm16, _pcm16_to_float32
 from .log import log_fields, logger
 
 _FRAME_USERDATA_VAD_ATTRIBUTE = "ai_coustics.vad"
@@ -153,20 +153,7 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         native_vad = self._native_vad
         context = self._context
         assert native_vad is not None and context is not None
-
-        samples = np.frombuffer(frame.data, dtype=np.int16)
-        expected_samples = frame.samples_per_channel * frame.num_channels
-        if samples.size != expected_samples:
-            raise ValueError(
-                f"AudioFrame contains {samples.size} samples, expected {expected_samples}"
-            )
-
-        channels = samples.reshape(frame.samples_per_channel, frame.num_channels)
-        mono = (
-            channels[:, 0].copy()
-            if frame.num_channels == 1
-            else np.rint(channels.mean(axis=1, dtype=np.float32)).astype(np.int16)
-        )
+        mono = _mono_pcm16(frame)
 
         inference_block_size = self._model.get_optimal_block_size(frame.sample_rate)
         stream_format = (frame.sample_rate, inference_block_size)

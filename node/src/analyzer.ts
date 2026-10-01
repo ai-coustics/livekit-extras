@@ -13,7 +13,7 @@ import {
   type FrameProcessorStreamInfo,
 } from "@livekit/rtc-node";
 
-import { errorDetail, pcm16ToFloat32, resolveLicenseKey } from "./common.js";
+import { errorDetail, monoPcm16, pcm16ToFloat32, resolveLicenseKey } from "./common.js";
 import { writeLog } from "./log.js";
 
 const DEFAULT_ANALYSIS_INTERVAL_SECONDS = 5;
@@ -133,27 +133,7 @@ export class Collector extends FrameProcessor<AudioFrame> {
         this.streamFormat = streamFormat;
       }
 
-      const expectedSamples = frame.samplesPerChannel * frame.channels;
-      if (frame.data.length !== expectedSamples) {
-        throw new Error(
-          `AudioFrame contains ${frame.data.length} samples, expected ${expectedSamples}`,
-        );
-      }
-
-      const samples = pcm16ToFloat32(frame.data);
-      const mono = new Float32Array(frame.samplesPerChannel);
-      if (frame.channels === 1) {
-        mono.set(samples);
-      } else {
-        for (let sample = 0; sample < frame.samplesPerChannel; sample += 1) {
-          let sum = 0;
-          for (let channel = 0; channel < frame.channels; channel += 1) {
-            sum += samples[sample * frame.channels + channel]!;
-          }
-          mono[sample] = sum / frame.channels;
-        }
-      }
-      collector.buffer(mono);
+      collector.buffer(pcm16ToFloat32(monoPcm16(frame)));
       this.hasBufferedAudio = true;
     } catch (error) {
       writeLog(
