@@ -164,8 +164,6 @@ export class Collector extends FrameProcessor<AudioFrame> {
   }
 
   close(): void {
-    if (this.closed) return;
-    this.detach();
     this.closeAnalyzer();
   }
 }

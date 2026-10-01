@@ -162,9 +162,6 @@ class Collector(rtc.FrameProcessor[rtc.AudioFrame]):
         self._collector = None
 
     def _close(self) -> None:
-        if self._closed:
-            return
-        self._detach()
         self._close_analyzer()
 
 
@@ -198,27 +195,20 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
         except Exception as error:
             raise RuntimeError(f"Failed to create ai-coustics Analyzer: {error}") from error
 
-        self._native_analyzer: aic_sdk.Analyzer | None = native_analyzer
         self._model_id = model_id
         self._analysis_interval = analysis_interval
         self._enable_metrics = enable_metrics
         self._sequence = 0
         self._closed = False
         self._close_event = asyncio.Event()
-        self._close_task: asyncio.Task[None] | None = None
         self.collector = Collector(
             native_collector,
             reset_analyzer=native_analyzer.reset,
             close_analyzer=self._request_close,
         )
-        self._task = loop.create_task(self._analysis_loop(), name="ai-coustics-analyzer")
-
-    async def _terminate_session(self) -> None:
-        native_analyzer = self._native_analyzer
-        self._native_analyzer = None
-        if native_analyzer is None:
-            return
-        await asyncio.to_thread(native_analyzer.terminate_session)
+        self._task = loop.create_task(
+            self._analysis_loop(native_analyzer), name="ai-coustics-analyzer"
+        )
 
     async def _analyze_once(self, native_analyzer: aic_sdk.Analyzer) -> None:
         started = time.perf_counter()
@@ -288,11 +278,9 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
                 ),
             )
 
-    async def _analysis_loop(self) -> None:
-        native_analyzer = self._native_analyzer
-        assert native_analyzer is not None
+    async def _analysis_loop(self, native_analyzer: aic_sdk.Analyzer) -> None:
         try:
-            while not self._close_event.is_set():
+            while True:
                 try:
                     await asyncio.wait_for(
                         self._close_event.wait(), timeout=self._analysis_interval
@@ -314,12 +302,7 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
                         ),
                     )
         finally:
-            await self._terminate_session()
-
-    async def _finish_close(self) -> None:
-        await self._task
-        # Keep an idempotent fallback in case the loop exits before entering its try/finally.
-        await self._terminate_session()
+            await asyncio.to_thread(native_analyzer.terminate_session)
 
     def _request_close(self) -> None:
         if self._closed:
@@ -327,13 +310,9 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
         self._closed = True
         self.collector._detach()
         self._close_event.set()
-        self._close_task = asyncio.create_task(
-            self._finish_close(), name="ai-coustics-analyzer-close"
-        )
 
     async def aclose(self) -> None:
         """Stop scheduled analysis and terminate the SDK session."""
 
         self._request_close()
-        assert self._close_task is not None
-        await self._close_task
+        await self._task
