@@ -6,4 +6,4 @@ export {
   Collector,
 } from "./analyzer.js";
 export { type AnalysisResult, Model } from "@ai-coustics/aic-sdk";
-export { VAD, type VADOptions, type VADParameters, VADProcessor } from "./vad.js";
+export { VAD, type VADOptions, type VADParameters } from "./vad.js";

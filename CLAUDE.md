@@ -68,13 +68,13 @@ surface immediately, with backend auth continuing in the SDK grace period); **au
 lazy** because LiveKit only supplies stream geometry with the first frame. Multichannel input is
 downmixed to mono before it reaches the SDK.
 
-- **`VAD` / `VADProcessor`** (`vad.py` / `vad.ts`) — inference runs *once*, in the pass-through
-  `vad.processor` frame processor, which attaches immutable per-block snapshots (including raw mono
-  PCM) to `frame.userdata`. Every `VADStream` derives LiveKit events from those shared snapshots, so
-  extra streams cost no native VADs and no extra inference. Closing a stream must not tear down the
-  shared SDK session — RoomIO closes `vad.processor`. The wrapper overrides SDK duration defaults
-  with LiveKit-compatible values (50 ms minimum speech, 250 ms speech hold, the latter satisfying
-  LiveKit's streaming turn detector); explicit `VADParameters` still win.
+- **`VAD`** (`vad.py` / `vad.ts`) — needs nothing in RoomIO's `noise_cancellation` slot. Each
+  `VADStream` checks out a native SDK VAD from the `VAD`'s pool and runs inference on the frames
+  AgentSession pushes (after noise cancellation). Closed streams return their native VAD without a
+  reset. A replacement stream keeps the model history and starts no new SDK session. Concurrent
+  streams each hold their own native VAD. A job shutdown callback terminates the pool. The wrapper overrides
+  SDK duration defaults with LiveKit-compatible values (50 ms minimum speech, 250 ms speech hold,
+  the latter satisfying LiveKit's streaming turn detector); explicit `VADParameters` still win.
 - **`Analyzer` / `Collector`** (`analyzer.py` / `analyzer.ts`) — the public `collector` is a
   transparent `FrameProcessor` that buffers mono float32; the analyzer runs periodic
   `analyze_buffered()`/`analyze()` inference and emits `analysis_result` / `analysisResult` events
@@ -82,13 +82,13 @@ downmixed to mono before it reaches the SDK.
   around an SDK collector/analyzer pair; Node uses a timer around the synchronous call on a single
   SDK `Analyzer`.
 
-RoomIO has a single `noise_cancellation` slot, so a session installs either `vad.processor` or
-`analyzer.collector`; there is no chaining helper. Shared helpers (license key, PCM conversion)
+RoomIO has a single `noise_cancellation` slot. The VAD needs none, so the slot holds
+`analyzer.collector` or an enhancer; there is no chaining helper. Shared helpers (license key, PCM conversion)
 live in `common.py` / `common.ts`. Node imports SDK types directly from `@ai-coustics/aic-sdk`,
 which ships its own declarations.
 
-**Fail-open is a hard invariant.** Both frame processors return the *original* frame; room audio
-must keep flowing whatever the SDK does. Slower-than-realtime VAD warnings are rate-limited. Keep
+**Fail-open is a hard invariant.** The Collector returns the *original* frame; room audio must keep
+flowing whatever the SDK does. The VAD is not in the room audio path. Slower-than-realtime VAD warnings are rate-limited. Keep
 the model's fixed prediction delay conceptually distinct from processing backlog
 (scheduling/compute debt) in metrics and logs.
 

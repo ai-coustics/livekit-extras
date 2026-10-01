@@ -8,16 +8,15 @@ from dataclasses import dataclass
 import aic_sdk
 import numpy as np
 from livekit import agents, rtc
+from livekit.agents import get_job_context
 
 from .common import _license_key, _pcm16_to_float32
 from .log import log_fields, logger
 
-_FRAME_USERDATA_VAD_ATTRIBUTE = "ai_coustics.vad"
 _SLOW_WARNING_INTERVAL = 10.0
 _SLOW_INFERENCE_BACKLOG_THRESHOLD = 0.2
 _DEFAULT_SPEECH_HOLD_DURATION = 0.25
 _DEFAULT_MINIMUM_SPEECH_DURATION = 0.05
-_MISSING_METADATA_WARNING_FRAMES = 10
 
 
 @dataclass
@@ -42,25 +41,8 @@ class _InferenceResult:
     prediction_delay_samples: int
 
 
-@dataclass(frozen=True)
-class _InferenceError:
-    message: str
-    cause: Exception
-
-
-@dataclass(frozen=True)
-class _FrameMetadata:
-    results: tuple[_InferenceResult, ...] = ()
-    error: _InferenceError | None = None
-
-
-class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
-    """Pass-through processor that runs one SDK VAD and annotates input frames.
-
-    Install this processor at the start of RoomIO's ``noise_cancellation`` path. Every
-    :class:`VADStream` created by the owning :class:`VAD` then consumes the same immutable
-    inference snapshots from ``AudioFrame.userdata`` without running the model again.
-    """
+class _NativeVad:
+    """One SDK VAD and its inference state, handed between streams without a reset."""
 
     def __init__(self, *, model: aic_sdk.Model, license_key: str) -> None:
         aic_sdk.set_sdk_id(8)  # type: ignore[attr-defined]
@@ -71,11 +53,8 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
         self._model = model
         self._model_id = model.get_id()
-        self._native_vad: aic_sdk.Vad | None = native_vad
-        self._context: aic_sdk.VadContext | None = native_vad.get_context()
-        self._enabled = True
-        self._closed = False
-        self._stream_info: dict[str, str] = {}
+        self._native_vad = native_vad
+        self.context = native_vad.get_context()
         self._format: tuple[int, int] | None = None
         self._inference_buffer = bytearray()
         self._prediction_delay_samples = 0
@@ -83,76 +62,9 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         self._slow_warning_active = False
         self._last_slow_warning = 0.0
 
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
-
-    @enabled.setter
-    def enabled(self, value: bool) -> None:
-        if self._closed or value == self._enabled:
-            return
-        if value:
-            self._reset()
-        self._enabled = value
-
-    @property
-    def context(self) -> aic_sdk.VadContext:
-        if self._context is None:
-            raise RuntimeError("Cannot get context from a closed ai-coustics VAD processor")
-        return self._context
-
-    def _reset(self) -> None:
-        if self._context is not None:
-            self._context.reset()
-        self._format = None
-        self._inference_buffer.clear()
-        self._prediction_delay_samples = 0
-        self._processing_backlog = 0.0
-        self._slow_warning_active = False
-
-    def _on_stream_info_updated(
-        self,
-        *,
-        room_name: str,
-        participant_identity: str,
-        publication_sid: str,
-    ) -> None:
-        stream_info = {
-            "room_name": room_name,
-            "participant_identity": participant_identity,
-            "publication_sid": publication_sid,
-        }
-        if self._stream_info and self._stream_info != stream_info:
-            self._reset()
-        self._stream_info = stream_info
-
-    def _on_stream_info_cleared(self) -> None:
-        if self._stream_info:
-            self._reset()
-            self._stream_info = {}
-
-    def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
-        if not self._enabled or self._native_vad is None or self._context is None:
-            return frame
-
-        try:
-            results = self._process_frame(frame)
-            metadata = _FrameMetadata(results=tuple(results))
-        except Exception as error:
-            metadata = _FrameMetadata(
-                error=_InferenceError(
-                    message=str(error),
-                    cause=error.__cause__ if isinstance(error.__cause__, Exception) else error,
-                )
-            )
-
-        frame.userdata[_FRAME_USERDATA_VAD_ATTRIBUTE] = metadata
-        return frame
-
     def _process_frame(self, frame: rtc.AudioFrame) -> list[_InferenceResult]:
         native_vad = self._native_vad
-        context = self._context
-        assert native_vad is not None and context is not None
+        context = self.context
 
         samples = np.frombuffer(frame.data, dtype=np.int16)
         expected_samples = frame.samples_per_channel * frame.num_channels
@@ -258,7 +170,6 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             "vad",
             model_provider="ai-coustics",
             model_name=self._model_id,
-            **self._stream_info,
         )
         if self._format is not None:
             diagnostics.update(
@@ -270,21 +181,16 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         diagnostics.update(fields)
         return diagnostics
 
-    def _close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self._enabled = False
-        native_vad = self._native_vad
-        self._native_vad = None
-        self._context = None
-        self._inference_buffer.clear()
-        if native_vad is not None:
-            native_vad.terminate_session()
+    def _terminate(self) -> None:
+        self._native_vad.terminate_session()
 
 
 class VAD(agents.vad.VAD):
-    """LiveKit VAD whose shared ``processor`` performs the SDK inference."""
+    """LiveKit VAD whose streams run SDK inference on a pool of native VADs.
+
+    Use one VAD per AgentSession: the pool keeps model history, so all its streams must see the
+    same audio.
+    """
 
     def __init__(
         self,
@@ -308,6 +214,8 @@ class VAD(agents.vad.VAD):
             )
         )
 
+        self._model = model
+        self._license_key = _license_key(license_key)
         self._model_id = model.get_id()
         self._prefix_padding_duration = prefix_padding_duration
         self._max_buffered_speech = max_buffered_speech
@@ -316,19 +224,17 @@ class VAD(agents.vad.VAD):
             minimum_speech_duration=_DEFAULT_MINIMUM_SPEECH_DURATION,
         )
         self._streams: weakref.WeakSet[VADStream] = weakref.WeakSet()
-        self._processor = VADProcessor(model=model, license_key=_license_key(license_key))
-        self._default_speech_hold_duration = self._processor.context.get_parameter(
+        native = _NativeVad(model=model, license_key=self._license_key)
+        self._idle = [native]
+        self._active: set[_NativeVad] = set()
+        self._draining = False
+        self._shutdown_registered = False
+        self._default_speech_hold_duration = native.context.get_parameter(
             aic_sdk.VadParameter.SpeechHoldDuration
         )
         self.set_parameters(self._parameters)
         if vad_parameters is not None:
             self.set_parameters(vad_parameters)
-
-    @property
-    def processor(self) -> VADProcessor:
-        """The processor that must be installed in RoomIO's noise-cancellation path."""
-
-        return self._processor
 
     @property
     def model(self) -> str:
@@ -347,7 +253,6 @@ class VAD(agents.vad.VAD):
     def stream(self) -> VADStream:
         stream = VADStream(
             self,
-            processor=self._processor,
             prefix_padding_duration=self._prefix_padding_duration,
             max_buffered_speech=self._max_buffered_speech,
         )
@@ -378,21 +283,61 @@ class VAD(agents.vad.VAD):
         name: str,
         value: float,
     ) -> bool:
-        try:
-            self._processor.context.set_parameter(parameter, value)
-        except Exception as error:
-            logger.warning(
-                "VAD: parameter rejected; keeping the current value",
-                extra=self._processor._diagnostic_fields(
-                    parameter=name,
-                    parameter_value=value,
-                    error_type=type(error).__name__,
-                    error_message=str(error),
-                ),
-                exc_info=(type(error), error, error.__traceback__),
-            )
-            return False
+        # All native VADs share one model, so they accept and reject the same values.
+        for native in (*self._idle, *self._active):
+            try:
+                native.context.set_parameter(parameter, value)
+            except Exception as error:
+                logger.warning(
+                    "VAD: parameter rejected; keeping the current value",
+                    extra=native._diagnostic_fields(
+                        parameter=name,
+                        parameter_value=value,
+                        error_type=type(error).__name__,
+                        error_message=str(error),
+                    ),
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                return False
         return True
+
+    def _acquire(self) -> _NativeVad:
+        if not self._shutdown_registered:
+            job_context = get_job_context(required=False)
+            if job_context is not None:
+                job_context.add_shutdown_callback(self._drain)
+                self._shutdown_registered = True
+
+        native = self._idle.pop() if self._idle else self._create_native()
+        self._active.add(native)
+        return native
+
+    def _create_native(self) -> _NativeVad:
+        native = _NativeVad(model=self._model, license_key=self._license_key)
+        for parameter, value in (
+            (aic_sdk.VadParameter.Sensitivity, self._parameters.sensitivity),
+            (aic_sdk.VadParameter.SpeechHoldDuration, self._parameters.speech_hold_duration),
+            (
+                aic_sdk.VadParameter.MinimumSpeechDuration,
+                self._parameters.minimum_speech_duration,
+            ),
+        ):
+            if value is not None:
+                native.context.set_parameter(parameter, value)
+        return native
+
+    def _release(self, native: _NativeVad, *, discard: bool) -> None:
+        self._active.discard(native)
+        if discard or self._draining:
+            native._terminate()
+        else:
+            self._idle.append(native)
+
+    async def _drain(self) -> None:
+        self._draining = True
+        idle, self._idle = self._idle, []
+        for native in idle:
+            native._terminate()
 
 
 class VADStream(agents.vad.VADStream):
@@ -400,31 +345,36 @@ class VADStream(agents.vad.VADStream):
         self,
         vad: VAD,
         *,
-        processor: VADProcessor,
         prefix_padding_duration: float,
         max_buffered_speech: float,
     ) -> None:
-        self._processor = processor
+        self._owner = vad
         self._prefix_padding_duration = prefix_padding_duration
         self._max_buffered_speech = max_buffered_speech
-        self._missing_metadata_frames = 0
         super().__init__(vad)
 
     async def _main_task(self) -> None:
+        # This body never runs if the stream closes before the task starts, so acquire and
+        # release must both happen here.
+        native = self._owner._acquire()
+        failed = False
         try:
-            await self._run_main_task()
+            await self._run_main_task(native)
         except Exception as error:
+            failed = True
             logger.error(
                 "VAD: stream failed",
-                extra=self._processor._diagnostic_fields(
+                extra=native._diagnostic_fields(
                     error_type=type(error).__name__,
                     error_message=str(error),
                 ),
                 exc_info=(type(error), error, error.__traceback__),
             )
             raise
+        finally:
+            self._owner._release(native, discard=failed)
 
-    async def _run_main_task(self) -> None:
+    async def _run_main_task(self, native: _NativeVad) -> None:
         input_sample_rate = 0
         prefix_frames: deque[rtc.AudioFrame] = deque()
         prefix_samples = 0
@@ -490,7 +440,7 @@ class VADStream(agents.vad.VADStream):
                 speech_buffer_full = True
                 logger.warning(
                     "VAD: maximum buffered speech reached; ignoring further audio",
-                    extra=self._processor._diagnostic_fields(
+                    extra=native._diagnostic_fields(
                         max_buffered_speech=self._max_buffered_speech,
                     ),
                 )
@@ -514,29 +464,13 @@ class VADStream(agents.vad.VADStream):
             if not isinstance(input_frame, rtc.AudioFrame):
                 continue
 
-            metadata = input_frame.userdata.get(_FRAME_USERDATA_VAD_ATTRIBUTE)
-            if not isinstance(metadata, _FrameMetadata):
-                self._missing_metadata_frames += 1
-                if self._missing_metadata_frames == _MISSING_METADATA_WARNING_FRAMES:
-                    logger.error(
-                        "VAD: no inference metadata found; pass vad.processor as RoomIO "
-                        "noise_cancellation",
-                        extra=self._processor._diagnostic_fields(
-                            missing_metadata_frames=self._missing_metadata_frames,
-                        ),
-                    )
-                continue
-            self._missing_metadata_frames = 0
-            if metadata.error is not None:
-                raise RuntimeError(metadata.error.message) from metadata.error.cause
-
-            for result in metadata.results:
+            for result in native._process_frame(input_frame):
                 if not input_sample_rate:
                     input_sample_rate = result.sample_rate
                 elif result.sample_rate != input_sample_rate:
                     logger.error(
                         "VAD: received frame with a different sample rate",
-                        extra=self._processor._diagnostic_fields(
+                        extra=native._diagnostic_fields(
                             sample_rate=input_sample_rate,
                             received_sample_rate=result.sample_rate,
                         ),

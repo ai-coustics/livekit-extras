@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { Model, VAD, type VADOptions } from "../src/index.js";
+import { Analyzer, Model, VAD } from "../src/index.js";
 
 const describeIf = process.env.AIC_SDK_LICENSE ? describe : describe.skip;
 const livekitUrl = process.env.LIVEKIT_URL ?? "ws://127.0.0.1:7880";
@@ -29,6 +29,8 @@ const livekitApiKey = process.env.LIVEKIT_API_KEY ?? "devkey";
 const livekitApiSecret = process.env.LIVEKIT_API_SECRET ?? "secret";
 const vadModelId =
   process.env.AIC_INTEGRATION_VAD_MODEL_ID ?? "vad-2.1-xxs-16khz";
+const analysisModelId =
+  process.env.AIC_INTEGRATION_ANALYSIS_MODEL_ID ?? "tyto-1.1-l-16khz";
 const modelDir =
   process.env.AIC_INTEGRATION_MODEL_DIR ??
   path.join(os.homedir(), ".cache", "aic-sdk", "models");
@@ -43,16 +45,6 @@ initializeLogger({ pretty: false, level: "error" });
 class ObservedVAD extends VAD {
   readonly createdAt = Date.now();
   inferenceTimes: number[] = [];
-  processorClosed = false;
-
-  constructor(options: VADOptions) {
-    super(options);
-    const close = this.processor.close.bind(this.processor);
-    this.processor.close = () => {
-      this.processorClosed = true;
-      close();
-    };
-  }
 
   override stream(): VADStream {
     const stream = super.stream();
@@ -154,14 +146,16 @@ describeIf("VAD in a real AgentSession room", () => {
     async () => {
       fs.mkdirSync(modelDir, { recursive: true });
       const vadModel = Model.fromFile(await Model.download(vadModelId, modelDir));
+      const analysisModel = Model.fromFile(await Model.download(analysisModelId, modelDir));
       const detector = new ObservedVAD({ model: vadModel });
+      const analyzer = new Analyzer({ model: analysisModel });
       const roomName = `ai-coustics-e2e-${randomUUID()}`;
       let agentRoom: Room | undefined;
       let publisherRoom: Room | undefined;
       let source: AudioSource | undefined;
       let session: voice.AgentSession | undefined;
       let sessionStarted = false;
-      let processorClosedByRoomIO = false;
+      let activeAfterSessionClose = -1;
 
       try {
         agentRoom = await connectRoom({
@@ -184,7 +178,7 @@ describeIf("VAD in a real AgentSession room", () => {
             audioSampleRate: inputSampleRate,
             audioNumChannels: 1,
             participantIdentity: "publisher",
-            noiseCancellation: detector.processor,
+            noiseCancellation: analyzer.collector,
             textEnabled: false,
             videoEnabled: false,
           },
@@ -215,17 +209,17 @@ describeIf("VAD in a real AgentSession room", () => {
       } finally {
         if (sessionStarted) {
           await session!.close();
-        } else {
-          detector.processor.close();
         }
-        processorClosedByRoomIO = detector.processorClosed;
+        activeAfterSessionClose = detector["active"].size;
+        analyzer.close();
         await source?.close();
         await publisherRoom?.disconnect();
         await agentRoom?.disconnect();
         await detector.close();
       }
 
-      expect(processorClosedByRoomIO).toBe(true);
+      expect(activeAfterSessionClose).toBe(0);
+      expect(detector["idle"]).toHaveLength(0);
     },
     45_000,
   );

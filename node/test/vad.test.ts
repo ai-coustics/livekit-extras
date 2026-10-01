@@ -1,11 +1,13 @@
 import {
+  type JobContext,
   VAD as LiveKitVAD,
   VADEventType,
   initializeLogger,
   log,
+  runWithJobContext,
   type VADStream,
 } from "@livekit/agents";
-import { AudioFrame, FrameProcessor } from "@livekit/rtc-node";
+import { AudioFrame } from "@livekit/rtc-node";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sdk = vi.hoisted(() => {
@@ -148,28 +150,12 @@ function makeFrame(
   return new AudioFrame(data, sampleRate, channels, data.length / channels);
 }
 
-function pushProcessed(vad: VAD, stream: VADStream, frame: AudioFrame): void {
-  stream.pushFrame(vad.processor.process(frame));
-}
-
-class MutingProcessor extends FrameProcessor<AudioFrame> {
-  isEnabled(): boolean {
-    return true;
-  }
-
-  setEnabled(): void {}
-
-  process(frame: AudioFrame): AudioFrame {
-    return new AudioFrame(
-      new Int16Array(frame.samplesPerChannel),
-      frame.sampleRate,
-      1,
-      frame.samplesPerChannel,
-      frame.userdata,
-    );
-  }
-
-  close(): void {}
+function fakeJob(): { context: JobContext; shutdownCallbacks: Array<() => Promise<void>> } {
+  const shutdownCallbacks: Array<() => Promise<void>> = [];
+  const context = {
+    addShutdownCallback: (callback: () => Promise<void>) => shutdownCallbacks.push(callback),
+  } as unknown as JobContext;
+  return { context, shutdownCallbacks };
 }
 
 async function collectEvents(stream: VADStream) {
@@ -278,11 +264,7 @@ describe("VAD", () => {
       [0.1, false],
     );
 
-    pushProcessed(
-      vad,
-      stream,
-      makeFrame(Int16Array.from({ length: 640 }, (_, index) => index)),
-    );
+    stream.pushFrame(makeFrame(Int16Array.from({ length: 640 }, (_, index) => index)));
     const events = await collectEvents(stream);
 
     expect(events.map((event) => event.type)).toEqual([
@@ -320,7 +302,7 @@ describe("VAD", () => {
     const native = sdk.instances[0]!;
     native.predictions.push([0.9, true], ...Array(25).fill([0.1, false]));
 
-    pushProcessed(vad, stream, makeFrame(new Int16Array(26 * 160)));
+    stream.pushFrame(makeFrame(new Int16Array(26 * 160)));
     const events = await collectEvents(stream);
 
     const inferenceEvents = events.filter(
@@ -363,7 +345,7 @@ describe("VAD", () => {
       samples.fill(block + 1, block * 480, (block + 1) * 480);
     }
 
-    pushProcessed(vad, stream, makeFrame(samples, 48_000));
+    stream.pushFrame(makeFrame(samples, 48_000));
     const events = await collectEvents(stream);
     const start = events.find(
       (event) => event.type === VADEventType.START_OF_SPEECH,
@@ -391,9 +373,7 @@ describe("VAD", () => {
     const native = sdk.instances[0]!;
     native.predictions.push([0, false]);
 
-    pushProcessed(
-      vad,
-      stream,
+    stream.pushFrame(
       makeFrame(new Int16Array([1000, 3000, 2000, 4000, 3000, 5000, 4000, 6000]), 16_000, 2),
     );
     const events = await collectEvents(stream);
@@ -421,11 +401,7 @@ describe("VAD", () => {
       [0.1, false],
     );
 
-    pushProcessed(
-      vad,
-      stream,
-      makeFrame(Int16Array.from({ length: 20 }, (_, index) => index + 1), 10),
-    );
+    stream.pushFrame(makeFrame(Int16Array.from({ length: 20 }, (_, index) => index + 1), 10));
     const events = await collectEvents(stream);
     const starts = events.filter(
       (event) => event.type === VADEventType.START_OF_SPEECH,
@@ -440,139 +416,160 @@ describe("VAD", () => {
     ]);
   });
 
-  it("resets stream state on flush without repeating shared inference", async () => {
+  it("resets stream state on flush but keeps model state", async () => {
     const vad = new VAD({
       model: new sdk.FakeModel(16_000, 4),
       licenseKey: "test-license",
     });
     const stream = vad.stream();
     const native = sdk.instances[0]!;
-    native.predictions.push([0, false]);
+    native.predictions.push([0.9, true], [0.9, true]);
 
-    pushProcessed(vad, stream, makeFrame(new Int16Array([1, 2])));
+    stream.pushFrame(makeFrame(new Int16Array([1, 2, 3, 4, 5, 6])));
     stream.flush();
-    pushProcessed(vad, stream, makeFrame(new Int16Array([3, 4, 5, 6])));
-    await collectEvents(stream);
-
-    expect(native.blocks).toHaveLength(1);
-    expect(native.blocks[0]).toEqual([1, 2, 3, 4].map((sample) => sample / 32768));
-    expect(native.context.resetCount).toBe(0);
-  });
-
-  it("updates active and future streams", async () => {
-    const vad = new VAD({
-      model: new sdk.FakeModel(),
-      licenseKey: "test-license",
-    });
-    const firstStream = vad.stream();
-    const native = sdk.instances[0]!;
-
-    vad.setParameters({ sensitivity: 0.8, speechHoldDuration: 0.6 });
-    const secondStream = vad.stream();
-
-    expect(sdk.instances).toHaveLength(1);
-    expect(native.context.getParameter(sdk.VadParameter.Sensitivity)).toBe(0.8);
-    expect(native.context.getParameter(sdk.VadParameter.SpeechHoldDuration)).toBe(0.6);
-    expect(vad.minSilenceDuration).toBe(600);
-
-    await Promise.all([collectEvents(firstStream), collectEvents(secondStream)]);
-  });
-
-  it("shares one inference result across multiple streams", async () => {
-    const vad = new VAD({
-      model: new sdk.FakeModel(),
-      licenseKey: "test-license",
-    });
-    const firstStream = vad.stream();
-    const secondStream = vad.stream();
-    const native = sdk.instances[0]!;
-    native.predictions.push([0.9, true], [0.1, false]);
-    const processed = vad.processor.process(makeFrame(new Int16Array(320)));
-    firstStream.pushFrame(processed);
-    secondStream.pushFrame(processed);
-
-    const [firstEvents, secondEvents] = await Promise.all([
-      collectEvents(firstStream),
-      collectEvents(secondStream),
-    ]);
-    expect(sdk.instances).toHaveLength(1);
-    expect(native.blocks).toHaveLength(2);
-    expect(firstEvents.map((event) => event.type)).toEqual(
-      secondEvents.map((event) => event.type),
-    );
-    expect(firstEvents.map((event) => event.probability)).toEqual(
-      secondEvents.map((event) => event.probability),
-    );
-  });
-
-  it("logs missing metadata with the standard VAD context", async () => {
-    const vad = new VAD({
-      model: new sdk.FakeModel(),
-      licenseKey: "test-license",
-    });
-    vad.processor.onStreamInfoUpdated({
-      roomName: "room",
-      participantIdentity: "participant",
-      publicationSid: "TR_test",
-    });
-    const stream = vad.stream();
-    const errorLog = vi.spyOn(log(), "error");
-
-    for (let index = 0; index < 10; index += 1) {
-      stream.pushFrame(makeFrame(new Int16Array(160)));
-    }
-    await collectEvents(stream);
-
-    expect(errorLog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        plugin: "ai-coustics",
-        component: "vad",
-        modelProvider: "ai-coustics",
-        modelName: "vad-test-model",
-        roomName: "room",
-        participantIdentity: "participant",
-        publicationSid: "TR_test",
-        missingMetadataFrames: 10,
-      }),
-      expect.stringContaining("VAD: no inference metadata found"),
-    );
-    errorLog.mockRestore();
-  });
-
-  it("keeps VAD audio when a downstream processor replaces the frame", async () => {
-    const vad = new VAD({
-      model: new sdk.FakeModel(16_000, 4),
-      licenseKey: "test-license",
-    });
-    const stream = vad.stream();
-    const native = sdk.instances[0]!;
-    native.predictions.push([0.9, true]);
-    const raw = new Int16Array([1000, 2000, 3000, 4000]);
-
-    const output = new MutingProcessor().process(vad.processor.process(makeFrame(raw)));
-    stream.pushFrame(output);
+    stream.pushFrame(makeFrame(new Int16Array([7, 8])));
     const events = await collectEvents(stream);
 
-    expect(native.blocks[0]).toEqual(Array.from(raw, (sample) => sample / 32768));
-    expect(Array.from(output.data)).toEqual([0, 0, 0, 0]);
-    expect(Array.from(events[0]!.frames[0]!.data)).toEqual(Array.from(raw));
+    expect(native.blocks).toHaveLength(2);
+    expect(native.blocks[1]).toEqual([5, 6, 7, 8].map((sample) => sample / 32768));
+    expect(native.context.resetCount).toBe(0);
+    expect(events.map((event) => event.type)).toEqual([
+      VADEventType.INFERENCE_DONE,
+      VADEventType.START_OF_SPEECH,
+      VADEventType.INFERENCE_DONE,
+      VADEventType.START_OF_SPEECH,
+    ]);
   });
 
-  it("keeps the shared native session alive until the processor closes", () => {
+  it("updates idle, active and new native VADs", async () => {
     const vad = new VAD({
       model: new sdk.FakeModel(),
       licenseKey: "test-license",
     });
-    const stream = vad.stream();
+    const firstStream = vad.stream();
+    vad.stream().close();
+
+    vad.setParameters({ sensitivity: 0.8, speechHoldDuration: 0.6 });
+    const thirdStream = vad.stream();
+    const fourthStream = vad.stream();
+
+    expect(sdk.instances).toHaveLength(3);
+    for (const native of sdk.instances) {
+      expect(native.context.getParameter(sdk.VadParameter.Sensitivity)).toBe(0.8);
+      expect(native.context.getParameter(sdk.VadParameter.SpeechHoldDuration)).toBe(0.6);
+    }
+    expect(vad.minSilenceDuration).toBe(600);
+
+    await Promise.all([
+      collectEvents(firstStream),
+      collectEvents(thirdStream),
+      collectEvents(fourthStream),
+    ]);
+  });
+
+  it("reuses the native VAD for a replacement stream without a reset", async () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(16_000, 4),
+      licenseKey: "test-license",
+    });
     const native = sdk.instances[0]!;
+    native.predictions.push([0, false], [0, false]);
 
-    stream.close();
-    stream.close();
+    const firstStream = vad.stream();
+    firstStream.pushFrame(makeFrame(new Int16Array([1, 2, 3, 4, 5, 6])));
+    await collectEvents(firstStream);
+    const secondStream = vad.stream();
+    secondStream.pushFrame(makeFrame(new Int16Array([7, 8])));
+    await collectEvents(secondStream);
 
+    expect(sdk.instances).toHaveLength(1);
+    expect(native.context.resetCount).toBe(0);
+    expect(native.initializations).toHaveLength(1);
+    expect(native.blocks[1]).toEqual([5, 6, 7, 8].map((sample) => sample / 32768));
     expect(native.terminateCalls).toBe(0);
-    vad.processor.close();
-    vad.processor.close();
-    expect(native.terminateCalls).toBe(1);
+  });
+
+  it("uses independent native VADs for concurrent streams", async () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    const firstStream = vad.stream();
+    const secondStream = vad.stream();
+
+    firstStream.pushFrame(makeFrame(new Int16Array(160)));
+    secondStream.pushFrame(makeFrame(new Int16Array(160)));
+    await Promise.all([collectEvents(firstStream), collectEvents(secondStream)]);
+
+    expect(sdk.instances).toHaveLength(2);
+    expect(sdk.instances.map((native) => native.blocks.length)).toEqual([1, 1]);
+  });
+
+  it("returns the native VAD to the pool synchronously on close", async () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+
+    vad.stream().close();
+    const stream = vad.stream();
+
+    expect(sdk.instances).toHaveLength(1);
+    await collectEvents(stream);
+  });
+
+  it("terminates every native VAD on close", async () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    vad.stream().close();
+    vad.stream();
+    vad.stream();
+
+    await vad.close();
+
+    expect(sdk.instances.map((native) => native.terminateCalls)).toEqual([1, 1]);
+  });
+
+  it("terminates idle and later released native VADs on job shutdown", async () => {
+    const job = fakeJob();
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    vad.stream().close();
+
+    const [firstStream, secondStream] = runWithJobContext(job.context, () => [
+      vad.stream(),
+      vad.stream(),
+    ]);
+    firstStream!.close();
+
+    await job.shutdownCallbacks[0]!();
+    expect(sdk.instances.map((native) => native.terminateCalls)).toEqual([1, 0]);
+    secondStream!.close();
+
+    expect(job.shutdownCallbacks).toHaveLength(1);
+    expect(sdk.instances.map((native) => native.terminateCalls)).toEqual([1, 1]);
+  });
+
+  it("rejects instead of throwing when terminating fails on job shutdown", async () => {
+    const job = fakeJob();
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    runWithJobContext(job.context, () => vad.stream()).close();
+    sdk.instances[0]!.terminateSession = () => {
+      throw new Error("terminate failed");
+    };
+
+    let shutdown: Promise<void> | undefined;
+    expect(() => {
+      shutdown = job.shutdownCallbacks[0]!();
+    }).not.toThrow();
+    await expect(shutdown).rejects.toThrow("terminate failed");
   });
 
   it("adds model and audio-format context to initialization errors", async () => {
@@ -583,12 +580,15 @@ describe("VAD", () => {
     const stream = vad.stream();
     const native = sdk.instances[0]!;
     native.initializeError = new Error("unsupported configuration");
-    pushProcessed(vad, stream, makeFrame(new Int16Array(480), 48_000));
+    stream.pushFrame(makeFrame(new Int16Array(480), 48_000));
 
     await expect(collectEvents(stream)).rejects.toThrow(
       "ai-coustics VAD initialization failed (model=vad-test-model, sampleRate=48000, blockSize=480): unsupported configuration",
     );
-    expect(native.terminateCalls).toBe(0);
+    expect(native.terminateCalls).toBe(1);
+
+    await collectEvents(vad.stream());
+    expect(sdk.instances).toHaveLength(2);
   });
 
   it("adds model and audio-format context to inference errors", async () => {
@@ -600,12 +600,12 @@ describe("VAD", () => {
     const native = sdk.instances[0]!;
     native.processError = new Error("native failure");
     const errorLog = vi.spyOn(log(), "error");
-    pushProcessed(vad, stream, makeFrame(new Int16Array(480), 48_000));
+    stream.pushFrame(makeFrame(new Int16Array(480), 48_000));
 
     await expect(collectEvents(stream)).rejects.toThrow(
       "ai-coustics VAD inference failed (model=vad-test-model, sampleRate=48000, blockSize=480): native failure",
     );
-    expect(native.terminateCalls).toBe(0);
+    expect(native.terminateCalls).toBe(1);
     expect(errorLog).toHaveBeenCalledWith(
       expect.objectContaining({
         plugin: "ai-coustics",
@@ -621,6 +621,9 @@ describe("VAD", () => {
       "VAD: stream failed",
     );
     errorLog.mockRestore();
+
+    await collectEvents(vad.stream());
+    expect(sdk.instances).toHaveLength(2);
   });
 
   it.each([

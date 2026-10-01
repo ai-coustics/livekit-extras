@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import cast
 
 import aic_sdk
@@ -111,6 +112,14 @@ class FakeVad:
         self.terminate_calls += 1
 
 
+class FakeJobContext:
+    def __init__(self) -> None:
+        self.shutdown_callbacks: list[Callable[[], Awaitable[None]]] = []
+
+    def add_shutdown_callback(self, callback: Callable[[], Awaitable[None]]) -> None:
+        self.shutdown_callbacks.append(callback)
+
+
 @pytest.fixture(autouse=True)
 def fake_native_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeVad.instances.clear()
@@ -152,10 +161,6 @@ def make_frame(
         num_channels=channels,
         samples_per_channel=data.size // channels,
     )
-
-
-def push_processed(vad: VAD, stream: agents.vad.VADStream, frame: rtc.AudioFrame) -> None:
-    stream.push_frame(vad.processor._process(frame))
 
 
 async def collect_events(stream: agents.vad.VADStream) -> list[agents.vad.VADEvent]:
@@ -264,7 +269,7 @@ async def test_emits_inference_and_speech_transition_events() -> None:
         ]
     )
 
-    push_processed(vad, stream, make_frame(np.arange(640, dtype=np.int16)))
+    stream.push_frame(make_frame(np.arange(640, dtype=np.int16)))
     events = await collect_events(stream)
 
     assert [event.type for event in events] == [
@@ -308,7 +313,7 @@ async def test_enforces_default_silence_floor_after_short_speech() -> None:
     native = FakeVad.instances[0]
     native.predictions.extend([(0.9, True), *[(0.1, False)] * 25])
 
-    push_processed(vad, stream, make_frame(np.arange(26 * 160, dtype=np.int16)))
+    stream.push_frame(make_frame(np.arange(26 * 160, dtype=np.int16)))
     events = await collect_events(stream)
 
     inference_events = [
@@ -347,7 +352,7 @@ async def test_aligns_events_and_candidate_audio_with_sdk_prediction_delay() -> 
     )
     samples = np.concatenate([np.full(160, index, dtype=np.int16) for index in range(1, 9)])
 
-    push_processed(vad, stream, make_frame(samples))
+    stream.push_frame(make_frame(samples))
     events = await collect_events(stream)
 
     start = next(event for event in events if event.type == agents.vad.VADEventType.START_OF_SPEECH)
@@ -385,7 +390,7 @@ async def test_caps_contiguous_speech_audio_and_keeps_rolling_prefix_current() -
         ]
     )
 
-    push_processed(vad, stream, make_frame(np.arange(1, 21, dtype=np.int16), sample_rate=10))
+    stream.push_frame(make_frame(np.arange(1, 21, dtype=np.int16), sample_rate=10))
     events = await collect_events(stream)
 
     starts = [event for event in events if event.type == agents.vad.VADEventType.START_OF_SPEECH]
@@ -435,7 +440,7 @@ async def test_warns_for_sustained_inference_backlog_with_structured_context(
     native.on_process = advance_clock
     native.predictions.extend([(0.0, False)] * 3)
 
-    push_processed(vad, stream, make_frame(np.arange(30, dtype=np.int16), sample_rate=100))
+    stream.push_frame(make_frame(np.arange(30, dtype=np.int16), sample_rate=100))
     with caplog.at_level("WARNING", logger="ai_coustics.livekit"):
         await collect_events(stream)
 
@@ -463,7 +468,7 @@ async def test_inference_error_includes_model_and_audio_format(
     sdk_error = ValueError("native failure")
     native.process_error = sdk_error
 
-    push_processed(vad, stream, make_frame(np.arange(480, dtype=np.int16), sample_rate=48000))
+    stream.push_frame(make_frame(np.arange(480, dtype=np.int16), sample_rate=48000))
 
     with pytest.raises(
         RuntimeError,
@@ -475,7 +480,7 @@ async def test_inference_error_includes_model_and_audio_format(
         await collect_events(stream)
 
     assert exc_info.value.__cause__ is sdk_error
-    assert native.terminate_calls == 0
+    assert native.terminate_calls == 1
     failure = next(record for record in caplog.records if record.message == "VAD: stream failed")
     assert failure.plugin == "ai-coustics"  # type: ignore[attr-defined]
     assert failure.component == "vad"  # type: ignore[attr-defined]
@@ -487,6 +492,9 @@ async def test_inference_error_includes_model_and_audio_format(
     assert failure.error_message.endswith("native failure")  # type: ignore[attr-defined]
     assert failure.exc_info is not None
 
+    await collect_events(vad.stream())
+    assert len(FakeVad.instances) == 2
+
 
 @pytest.mark.asyncio
 async def test_initialization_error_includes_model_and_audio_format() -> None:
@@ -496,7 +504,7 @@ async def test_initialization_error_includes_model_and_audio_format() -> None:
     sdk_error = ValueError("unsupported configuration")
     native.initialize_error = sdk_error
 
-    push_processed(vad, stream, make_frame(np.arange(480, dtype=np.int16), sample_rate=48000))
+    stream.push_frame(make_frame(np.arange(480, dtype=np.int16), sample_rate=48000))
 
     with pytest.raises(
         RuntimeError,
@@ -509,7 +517,10 @@ async def test_initialization_error_includes_model_and_audio_format() -> None:
         await collect_events(stream)
 
     assert exc_info.value.__cause__ is sdk_error
-    assert native.terminate_calls == 0
+    assert native.terminate_calls == 1
+
+    await collect_events(vad.stream())
+    assert len(FakeVad.instances) == 2
 
 
 @pytest.mark.asyncio
@@ -520,7 +531,7 @@ async def test_downmixes_stereo_and_reblocks_for_the_sdk() -> None:
     native.predictions.append((0.0, False))
     stereo = np.array([1000, 3000, 2000, 4000, 3000, 5000, 4000, 6000], dtype=np.int16)
 
-    push_processed(vad, stream, make_frame(stereo, channels=2))
+    stream.push_frame(make_frame(stereo, channels=2))
     events = await collect_events(stream)
 
     assert len(native.blocks) == 1
@@ -540,7 +551,7 @@ async def test_uses_input_sample_rate_without_plugin_resampling() -> None:
     native.predictions.append((0.0, False))
     input_samples = np.arange(480, dtype=np.int16)
 
-    push_processed(vad, stream, make_frame(input_samples, sample_rate=48000))
+    stream.push_frame(make_frame(input_samples, sample_rate=48000))
     events = await collect_events(stream)
 
     assert len(native.initialized_configs) == 1
@@ -558,139 +569,118 @@ async def test_uses_input_sample_rate_without_plugin_resampling() -> None:
 
 
 @pytest.mark.asyncio
-async def test_flush_resets_stream_state_without_repeating_shared_inference() -> None:
+async def test_flush_resets_stream_state_but_keeps_model_state() -> None:
     vad = create_vad(model=FakeModel(block_size=4))
     stream = vad.stream()
     native = FakeVad.instances[0]
-    native.predictions.append((0.0, False))
+    native.predictions.extend([(0.9, True), (0.9, True)])
 
-    push_processed(vad, stream, make_frame(np.array([1, 2], dtype=np.int16)))
+    stream.push_frame(make_frame(np.array([1, 2, 3, 4, 5, 6], dtype=np.int16)))
     stream.flush()
-    push_processed(vad, stream, make_frame(np.array([3, 4, 5, 6], dtype=np.int16)))
-    await collect_events(stream)
+    stream.push_frame(make_frame(np.array([7, 8], dtype=np.int16)))
+    events = await collect_events(stream)
 
-    assert len(native.blocks) == 1
-    assert np.array_equal(native.blocks[0], np.array([1, 2, 3, 4]) / 32768)
-    assert native.context.reset_count == 0
-
-
-@pytest.mark.asyncio
-async def test_parameter_updates_reach_active_and_future_streams() -> None:
-    vad = create_vad()
-    first_stream = vad.stream()
-    native = FakeVad.instances[0]
-
-    vad.set_parameters(VADParameters(sensitivity=0.8, speech_hold_duration=0.6))
-    second_stream = vad.stream()
-
-    assert len(FakeVad.instances) == 1
-    assert native.context.get_parameter(aic_sdk.VadParameter.Sensitivity) == 0.8
-    assert native.context.get_parameter(aic_sdk.VadParameter.SpeechHoldDuration) == 0.6
-    assert vad.min_silence_duration == 0.6
-
-    await collect_events(first_stream)
-    await collect_events(second_stream)
-
-
-@pytest.mark.asyncio
-async def test_multiple_streams_share_one_inference_result() -> None:
-    vad = create_vad()
-    first_stream = vad.stream()
-    second_stream = vad.stream()
-    native = FakeVad.instances[0]
-    native.predictions.extend([(0.9, True), (0.1, False)])
-    processed = vad.processor._process(make_frame(np.arange(320, dtype=np.int16)))
-
-    first_stream.push_frame(processed)
-    second_stream.push_frame(processed)
-    first_events = await collect_events(first_stream)
-    second_events = await collect_events(second_stream)
-
-    assert len(FakeVad.instances) == 1
     assert len(native.blocks) == 2
-    assert [event.type for event in first_events] == [event.type for event in second_events]
-    assert [event.probability for event in first_events] == [
-        event.probability for event in second_events
+    assert np.array_equal(native.blocks[1], np.array([5, 6, 7, 8]) / 32768)
+    assert native.context.reset_count == 0
+    assert [event.type for event in events] == [
+        agents.vad.VADEventType.INFERENCE_DONE,
+        agents.vad.VADEventType.START_OF_SPEECH,
+        agents.vad.VADEventType.INFERENCE_DONE,
+        agents.vad.VADEventType.START_OF_SPEECH,
     ]
 
 
 @pytest.mark.asyncio
-async def test_missing_metadata_log_uses_standard_vad_context(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_parameter_updates_reach_idle_active_and_new_native_vads() -> None:
     vad = create_vad()
-    vad.processor._on_stream_info_updated(
-        room_name="room",
-        participant_identity="participant",
-        publication_sid="TR_test",
-    )
-    stream = vad.stream()
+    first_stream = vad.stream()
+    second_stream = vad.stream()
+    await asyncio.sleep(0)
+    await second_stream.aclose()
 
-    for _ in range(10):
-        stream.push_frame(make_frame(np.zeros(160, dtype=np.int16)))
-    await collect_events(stream)
+    vad.set_parameters(VADParameters(sensitivity=0.8, speech_hold_duration=0.6))
+    third_stream = vad.stream()
+    fourth_stream = vad.stream()
+    await asyncio.sleep(0)
 
-    error = next(
-        record for record in caplog.records if "no inference metadata found" in record.message
-    )
-    assert error.plugin == "ai-coustics"  # type: ignore[attr-defined]
-    assert error.component == "vad"  # type: ignore[attr-defined]
-    assert error.model_provider == "ai-coustics"  # type: ignore[attr-defined]
-    assert error.model_name == "vad-test-model"  # type: ignore[attr-defined]
-    assert error.room_name == "room"  # type: ignore[attr-defined]
-    assert error.participant_identity == "participant"  # type: ignore[attr-defined]
-    assert error.publication_sid == "TR_test"  # type: ignore[attr-defined]
-    assert error.missing_metadata_frames == 10  # type: ignore[attr-defined]
+    assert len(FakeVad.instances) == 3
+    for native in FakeVad.instances:
+        assert native.context.get_parameter(aic_sdk.VadParameter.Sensitivity) == 0.8
+        assert native.context.get_parameter(aic_sdk.VadParameter.SpeechHoldDuration) == 0.6
+    assert vad.min_silence_duration == 0.6
+
+    for stream in (first_stream, third_stream, fourth_stream):
+        await collect_events(stream)
 
 
 @pytest.mark.asyncio
-async def test_vad_audio_survives_downstream_audio_replacement() -> None:
-    class MutingProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
-        enabled = True
-
-        def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
-            return rtc.AudioFrame(
-                data=np.zeros(frame.samples_per_channel, dtype=np.int16).tobytes(),
-                sample_rate=frame.sample_rate,
-                num_channels=1,
-                samples_per_channel=frame.samples_per_channel,
-                userdata=frame.userdata,
-            )
-
-        def _close(self) -> None:
-            pass
-
+async def test_replacement_stream_reuses_native_vad_without_reset() -> None:
     vad = create_vad(model=FakeModel(block_size=4))
-    stream = vad.stream()
     native = FakeVad.instances[0]
-    native.predictions.append((0.9, True))
-    raw = np.array([1000, 2000, 3000, 4000], dtype=np.int16)
+    native.predictions.extend([(0.0, False), (0.0, False)])
 
-    output = MutingProcessor()._process(vad.processor._process(make_frame(raw)))
-    stream.push_frame(output)
-    events = await collect_events(stream)
+    first_stream = vad.stream()
+    first_stream.push_frame(make_frame(np.array([1, 2, 3, 4, 5, 6], dtype=np.int16)))
+    await collect_events(first_stream)
+    second_stream = vad.stream()
+    second_stream.push_frame(make_frame(np.array([7, 8], dtype=np.int16)))
+    await collect_events(second_stream)
 
-    assert np.array_equal(native.blocks[0], raw.astype(np.float32) / 32768)
-    assert np.count_nonzero(np.frombuffer(output.data, dtype=np.int16)) == 0
-    assert np.array_equal(
-        np.frombuffer(events[0].frames[0].data, dtype=np.int16),
-        raw,
-    )
-
-
-@pytest.mark.asyncio
-async def test_stream_close_does_not_terminate_shared_native_session() -> None:
-    vad = create_vad()
-    stream = vad.stream()
-    native = FakeVad.instances[0]
-
-    await stream.aclose()
-    await stream.aclose()
+    assert len(FakeVad.instances) == 1
+    assert native.context.reset_count == 0
+    assert len(native.initialized_configs) == 1
+    assert np.array_equal(native.blocks[1], np.array([5, 6, 7, 8]) / 32768)
     assert native.terminate_calls == 0
 
-    vad.processor._close()
-    vad.processor._close()
-    assert native.terminate_calls == 1
+
+@pytest.mark.asyncio
+async def test_concurrent_streams_use_independent_native_vads() -> None:
+    vad = create_vad()
+    first_stream = vad.stream()
+    second_stream = vad.stream()
+    await asyncio.sleep(0)
+
+    first_stream.push_frame(make_frame(np.arange(160, dtype=np.int16)))
+    second_stream.push_frame(make_frame(np.arange(160, dtype=np.int16)))
+    await collect_events(first_stream)
+    await collect_events(second_stream)
+
+    assert len(FakeVad.instances) == 2
+    assert [len(native.blocks) for native in FakeVad.instances] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_stream_closed_before_its_task_starts_does_not_leak_a_native_vad() -> None:
+    vad = create_vad()
+
+    await vad.stream().aclose()
+    await collect_events(vad.stream())
+
+    assert len(FakeVad.instances) == 1
+
+
+@pytest.mark.asyncio
+async def test_job_shutdown_terminates_idle_and_later_released_native_vads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job: FakeJobContext | None = None
+    monkeypatch.setattr("ai_coustics.livekit.vad.get_job_context", lambda *, required: job)
+    vad = create_vad()
+    await collect_events(vad.stream())
+
+    job = FakeJobContext()
+    first_stream = vad.stream()
+    second_stream = vad.stream()
+    await asyncio.sleep(0)
+    await first_stream.aclose()
+
+    await job.shutdown_callbacks[0]()
+    assert [native.terminate_calls for native in FakeVad.instances] == [1, 0]
+    await second_stream.aclose()
+
+    assert len(job.shutdown_callbacks) == 1
+    assert [native.terminate_calls for native in FakeVad.instances] == [1, 1]
 
 
 @pytest.mark.parametrize(

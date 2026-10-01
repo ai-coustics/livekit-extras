@@ -33,10 +33,10 @@ and can be installed alongside it.
 | `vad()` and `vadSettings` | `new VAD({ model, vadParameters })` |
 | `Auth.livekitCloud()` or `Auth.aiCousticsApi(...)` | `AIC_SDK_LICENSE` or `licenseKey` |
 
-The official VAD reads its results from the official enhancement processor. This package uses a
-dedicated SDK VAD model instead. Provision a VAD model and install `vad.processor` as described
-below. LiveKit Cloud authentication is not carried over; obtain an ai-coustics SDK license before
-migrating.
+The official VAD reads its results from the official enhancement processor. This package runs a
+dedicated SDK VAD model instead and needs nothing in RoomIO's `noiseCancellation` slot, so the
+enhancement processor can stay there. Provision a VAD model as described below. LiveKit Cloud
+authentication is not carried over; obtain an ai-coustics SDK license before migrating.
 
 ## Model provisioning
 
@@ -59,8 +59,8 @@ const analysisModel = Model.fromFile(analysisPath);
 
 ## Usage
 
-RoomIO accepts one frame processor in its `noiseCancellation` slot. A session installs either
-`vad.processor` or `analyzer.collector` there.
+The VAD needs nothing in RoomIO's `noiseCancellation` slot. That slot holds one frame processor,
+such as an enhancer or `analyzer.collector`, and the VAD works alongside either.
 
 ### Voice activity detection
 
@@ -76,16 +76,17 @@ const session = new voice.AgentSession({
   vad,
   // ... stt, llm, tts
 });
-
-await session.start({
-  // ... agent, room
-  inputOptions: { noiseCancellation: vad.processor },
-});
 ```
 
-`vad.processor` must be installed in the `noiseCancellation` path whenever the VAD is used. All VAD
-streams read the immutable metadata it attaches to each frame, so the SDK model runs only once per
-audio block.
+The VAD runs the SDK model on the audio AgentSession passes to it, after any processor in the
+`noiseCancellation` slot. The SDK recommends running its VAD on original audio. Behind an
+enhancer, detection can differ slightly.
+
+Each VAD stream holds one native SDK VAD. When LiveKit replaces a stream, the new stream takes over
+the same native VAD with its model history. Every stream of a `VAD` must see the same audio, so do
+not share one `VAD` between sessions. A non-streaming STT adds a second concurrent stream, which
+uses a second native VAD and doubles inference. Model history persists when RoomIO switches to
+another participant's track within one stream.
 
 ### Audio-quality analysis
 
@@ -135,7 +136,8 @@ in milliseconds. See the
 model support, and further details.
 
 Set `AIC_SDK_LICENSE` or pass `licenseKey` to the constructor. Create a new `VAD` or `Analyzer` for
-each concurrent room; RoomIO closes its frame processor with the input stream.
+each concurrent room. RoomIO closes the analyzer's collector with the input stream; a `VAD` ends
+its SDK sessions at job shutdown or on `vad.close()`.
 
 Models must be provisioned explicitly. This package does not support
 `npx livekit-agents download-files`.

@@ -2,6 +2,7 @@ import {
   VAD as LiveKitVAD,
   VADStream as LiveKitVADStream,
   VADEventType,
+  getJobContext,
 } from "@livekit/agents";
 import {
   type Model,
@@ -10,23 +11,17 @@ import {
   VadParameter as AicVadParameter,
   _setSdkId as setSdkId,
 } from "@ai-coustics/aic-sdk";
-import {
-  AudioFrame,
-  FrameProcessor,
-  type FrameProcessorStreamInfo,
-} from "@livekit/rtc-node";
+import { AudioFrame } from "@livekit/rtc-node";
 
 import { errorDetail, pcm16ToFloat32, resolveLicenseKey } from "./common.js";
 import { writeLog } from "./log.js";
 
-const FRAME_USERDATA_VAD_ATTRIBUTE = "ai_coustics.vad";
 const DEFAULT_SPEECH_HOLD_DURATION_SECONDS = 0.25;
 const DEFAULT_MINIMUM_SPEECH_DURATION_SECONDS = 0.05;
 const DEFAULT_PREFIX_PADDING_DURATION_MS = 500;
 const DEFAULT_MAX_BUFFERED_SPEECH_MS = 60_000;
 const SLOW_INFERENCE_BACKLOG_THRESHOLD_MS = 200;
 const SLOW_WARNING_INTERVAL_MS = 10_000;
-const MISSING_METADATA_WARNING_FRAMES = 10;
 
 export interface VADParameters {
   sensitivity?: number;
@@ -54,34 +49,20 @@ interface InferenceResult {
   predictionDelaySamples: number;
 }
 
-interface InferenceError {
-  message: string;
-  cause: unknown;
-}
-
-interface FrameMetadata {
-  results: readonly InferenceResult[];
-  error?: InferenceError;
-}
-
-/** Pass-through processor that runs one SDK VAD and annotates input frames. */
-export class VADProcessor extends FrameProcessor<AudioFrame> {
+/** One SDK VAD and its inference state, handed between streams without a reset. */
+class NativeVad {
+  readonly context: VadContext;
   private readonly model: Model;
   private readonly modelId: string;
-  private nativeVad: AicVad | null;
-  private context: VadContext | null;
-  private processorEnabled = true;
-  private closed = false;
+  private readonly nativeVad: AicVad;
   private format: [number, number] | null = null;
   private inferenceBuffer = new Int16Array(0);
   private predictionDelaySamples = 0;
   private processingBacklogMs = 0;
   private slowWarningActive = false;
   private lastSlowWarning = 0;
-  private streamInfo: FrameProcessorStreamInfo | null = null;
 
   constructor(model: Model, licenseKey: string) {
-    super();
     setSdkId(9);
     let nativeVad: AicVad;
     try {
@@ -97,80 +78,13 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
     this.context = nativeVad.getContext();
   }
 
-  get sdkContext(): VadContext {
-    if (!this.context) {
-      throw new Error("Cannot get context from a closed ai-coustics VAD processor");
-    }
-    return this.context;
+  terminate(): void {
+    this.nativeVad.terminateSession();
   }
 
-  isEnabled(): boolean {
-    return this.processorEnabled;
-  }
-
-  setEnabled(enabled: boolean): void {
-    if (this.closed || enabled === this.processorEnabled) return;
-    if (enabled) this.reset();
-    this.processorEnabled = enabled;
-  }
-
-  override onStreamInfoUpdated(info: FrameProcessorStreamInfo): void {
-    if (
-      this.streamInfo &&
-      (this.streamInfo.roomName !== info.roomName ||
-        this.streamInfo.participantIdentity !== info.participantIdentity ||
-        this.streamInfo.publicationSid !== info.publicationSid)
-    ) {
-      this.reset();
-    }
-    this.streamInfo = info;
-  }
-
-  override onStreamInfoCleared(): void {
-    if (this.streamInfo) this.reset();
-    this.streamInfo = null;
-  }
-
-  process(frame: AudioFrame): AudioFrame {
-    if (!this.processorEnabled || !this.nativeVad || !this.context) return frame;
-
-    let metadata: FrameMetadata;
-    try {
-      metadata = { results: this.processFrame(frame) };
-    } catch (error) {
-      metadata = {
-        results: [],
-        error: { message: errorDetail(error), cause: error },
-      };
-    }
-    frame.userdata[FRAME_USERDATA_VAD_ATTRIBUTE] = metadata;
-    return frame;
-  }
-
-  reset(): void {
-    this.context?.reset();
-    this.format = null;
-    this.inferenceBuffer = new Int16Array(0);
-    this.predictionDelaySamples = 0;
-    this.processingBacklogMs = 0;
-    this.slowWarningActive = false;
-  }
-
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    this.processorEnabled = false;
-    const nativeVad = this.nativeVad;
-    this.nativeVad = null;
-    this.context = null;
-    this.inferenceBuffer = new Int16Array(0);
-    nativeVad?.terminateSession();
-  }
-
-  private processFrame(frame: AudioFrame): readonly InferenceResult[] {
+  processFrame(frame: AudioFrame): readonly InferenceResult[] {
     const nativeVad = this.nativeVad;
     const context = this.context;
-    if (!nativeVad || !context) return [];
 
     const expectedSamples = frame.samplesPerChannel * frame.channels;
     if (frame.data.length !== expectedSamples) {
@@ -288,7 +202,6 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
       modelProvider: "ai-coustics",
       modelName: this.modelId,
     };
-    if (this.streamInfo) Object.assign(diagnostics, this.streamInfo);
     if (this.format) {
       Object.assign(diagnostics, {
         sampleRate: this.format[0],
@@ -299,11 +212,16 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
   }
 }
 
-/** LiveKit VAD whose shared `processor` performs the SDK inference. */
+/**
+ * LiveKit VAD whose streams run SDK inference on a pool of native VADs. Use one VAD per
+ * AgentSession: the pool keeps model history, so all its streams must see the same audio.
+ */
 export class VAD extends LiveKitVAD {
   label = "ai-coustics.VAD";
 
   private readonly modelId: string;
+  private readonly sdkModel: Model;
+  private readonly licenseKey: string;
   private readonly prefixPaddingDuration: number;
   private readonly maxBufferedSpeech: number;
   private readonly parameters: VADParameters = {
@@ -311,7 +229,10 @@ export class VAD extends LiveKitVAD {
     minimumSpeechDuration: DEFAULT_MINIMUM_SPEECH_DURATION_SECONDS,
   };
   private readonly streams = new Set<WeakRef<AicVADStream>>();
-  private readonly sharedProcessor: VADProcessor;
+  private idle: NativeVad[];
+  private readonly active = new Set<NativeVad>();
+  private draining = false;
+  private shutdownRegistered = false;
 
   constructor(options: VADOptions) {
     const prefixPaddingDuration =
@@ -330,18 +251,13 @@ export class VAD extends LiveKitVAD {
     super({ updateInterval: (modelBlockSize / modelSampleRate) * 1000 });
 
     this.modelId = options.model.getId();
+    this.sdkModel = options.model;
+    this.licenseKey = resolveLicenseKey(options.licenseKey);
     this.prefixPaddingDuration = prefixPaddingDuration;
     this.maxBufferedSpeech = maxBufferedSpeech;
-    this.sharedProcessor = new VADProcessor(
-      options.model,
-      resolveLicenseKey(options.licenseKey),
-    );
+    this.idle = [new NativeVad(options.model, this.licenseKey)];
     this.setParameters(this.parameters);
     if (options.vadParameters) this.setParameters(options.vadParameters);
-  }
-
-  get processor(): VADProcessor {
-    return this.sharedProcessor;
   }
 
   get model(): string {
@@ -360,7 +276,8 @@ export class VAD extends LiveKitVAD {
 
   override stream(): LiveKitVADStream {
     const stream = new AicVADStream(this, {
-      processor: this.sharedProcessor,
+      native: this.acquire(),
+      release: (native, discard) => this.release(native, discard),
       prefixPaddingDuration: this.prefixPaddingDuration,
       maxBufferedSpeech: this.maxBufferedSpeech,
     });
@@ -404,64 +321,116 @@ export class VAD extends LiveKitVAD {
   override async close(): Promise<void> {
     for (const reference of this.streams) reference.deref()?.close();
     this.streams.clear();
-    this.sharedProcessor.close();
+    await this.drain();
   }
 
   private applyParameter(parameter: number, name: string, value: number): boolean {
-    try {
-      this.sharedProcessor.sdkContext.setParameter(parameter, value);
-    } catch (error) {
-      writeLog(
-        "warn",
-        "vad",
-        "parameter rejected; keeping the current value",
-        this.sharedProcessor.diagnosticFields({
-          parameter: name,
-          parameterValue: value,
-          errorType: error instanceof Error ? error.name : typeof error,
-          errorMessage: errorDetail(error),
-        }),
-        error,
-      );
-      return false;
+    // All native VADs share one model, so they accept and reject the same values.
+    for (const native of [...this.idle, ...this.active]) {
+      try {
+        native.context.setParameter(parameter, value);
+      } catch (error) {
+        writeLog(
+          "warn",
+          "vad",
+          "parameter rejected; keeping the current value",
+          native.diagnosticFields({
+            parameter: name,
+            parameterValue: value,
+            errorType: error instanceof Error ? error.name : typeof error,
+            errorMessage: errorDetail(error),
+          }),
+          error,
+        );
+        return false;
+      }
     }
     return true;
+  }
+
+  private acquire(): NativeVad {
+    if (!this.shutdownRegistered) {
+      const jobContext = getJobContext(false);
+      if (jobContext) {
+        jobContext.addShutdownCallback(() => this.drain());
+        this.shutdownRegistered = true;
+      }
+    }
+
+    const native = this.idle.pop() ?? this.createNative();
+    this.active.add(native);
+    return native;
+  }
+
+  private createNative(): NativeVad {
+    const native = new NativeVad(this.sdkModel, this.licenseKey);
+    const values: [AicVadParameter, number | undefined][] = [
+      [AicVadParameter.Sensitivity, this.parameters.sensitivity],
+      [AicVadParameter.SpeechHoldDuration, this.parameters.speechHoldDuration],
+      [AicVadParameter.MinimumSpeechDuration, this.parameters.minimumSpeechDuration],
+    ];
+    for (const [parameter, value] of values) {
+      if (value !== undefined) native.context.setParameter(parameter, value);
+    }
+    return native;
+  }
+
+  private release(native: NativeVad, discard: boolean): void {
+    this.active.delete(native);
+    if (discard || this.draining) native.terminate();
+    else this.idle.push(native);
+  }
+
+  // Async so that a terminate failure rejects instead of throwing synchronously into
+  // LiveKit's shutdown loop, which would skip its remaining shutdown steps.
+  private async drain(): Promise<void> {
+    this.draining = true;
+    const idle = this.idle;
+    this.idle = [];
+    for (const native of idle) native.terminate();
   }
 }
 
 interface StreamOptions {
-  processor: VADProcessor;
+  native: NativeVad;
+  release: (native: NativeVad, discard: boolean) => void;
   prefixPaddingDuration: number;
   maxBufferedSpeech: number;
 }
 
 class AicVADStream extends LiveKitVADStream {
-  private readonly processor: VADProcessor;
+  private readonly native: NativeVad;
+  private readonly onRelease: (native: NativeVad, discard: boolean) => void;
   private readonly prefixPaddingDuration: number;
   private readonly maxBufferedSpeech: number;
+  private released = false;
   private outputFinished = false;
   private pumpError: unknown;
-  private missingMetadataFrames = 0;
 
   constructor(vad: VAD, options: StreamOptions) {
     super(vad);
-    this.processor = options.processor;
+    this.native = options.native;
+    this.onRelease = options.release;
     this.prefixPaddingDuration = options.prefixPaddingDuration;
     this.maxBufferedSpeech = options.maxBufferedSpeech;
     void this.pump()
-      .then(() => this.finishOutput())
+      .then(async () => {
+        this.releaseNative(false);
+        await this.finishOutput();
+      })
       .catch(async (error: unknown) => {
         this.pumpError = error;
         writeLog(
           "error",
           "vad",
           "stream failed",
-          this.processor.diagnosticFields({
+          this.native.diagnosticFields({
             errorType: error instanceof Error ? error.name : typeof error,
             errorMessage: errorDetail(error),
           }),
           error,
         );
+        this.releaseNative(true);
         await this.finishOutput();
       });
   }
@@ -473,9 +442,12 @@ class AicVADStream extends LiveKitVADStream {
     void this.inputWriter.close();
   }
 
+  // LiveKit starts the next stream right after close() returns, so the native VAD must be back
+  // in the pool before then.
   override close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.releaseNative(false);
     void this.detachInputStream();
     void this.inputReader.cancel();
     void this.finishOutput();
@@ -489,6 +461,12 @@ class AicVADStream extends LiveKitVADStream {
       throw error;
     }
     return result;
+  }
+
+  private releaseNative(discard: boolean): void {
+    if (this.released) return;
+    this.released = true;
+    this.onRelease(this.native, discard);
   }
 
   private async finishOutput(): Promise<void> {
@@ -572,7 +550,7 @@ class AicVADStream extends LiveKitVADStream {
           "warn",
           "vad",
           "maximum buffered speech reached; ignoring further audio",
-          this.processor.diagnosticFields({
+          this.native.diagnosticFields({
             maxBufferedSpeechMs: this.maxBufferedSpeech,
           }),
         );
@@ -593,42 +571,22 @@ class AicVADStream extends LiveKitVADStream {
 
     while (!this.closed) {
       const { done, value } = await this.inputReader.read();
-      if (done) break;
+      // A read can resolve just before close(); by then the native VAD may belong to the next
+      // stream.
+      if (done || this.released) break;
       if (typeof value === "symbol") {
         resetState();
         continue;
       }
 
-      const metadata = value.userdata[FRAME_USERDATA_VAD_ATTRIBUTE] as
-        | FrameMetadata
-        | undefined;
-      if (!metadata || !Array.isArray(metadata.results)) {
-        this.missingMetadataFrames += 1;
-        if (this.missingMetadataFrames === MISSING_METADATA_WARNING_FRAMES) {
-          writeLog(
-            "error",
-            "vad",
-            "no inference metadata found; pass vad.processor as RoomIO noiseCancellation",
-            this.processor.diagnosticFields({
-              missingMetadataFrames: this.missingMetadataFrames,
-            }),
-          );
-        }
-        continue;
-      }
-      this.missingMetadataFrames = 0;
-      if (metadata.error) {
-        throw new Error(metadata.error.message, { cause: metadata.error.cause });
-      }
-
-      for (const result of metadata.results) {
+      for (const result of this.native.processFrame(value)) {
         if (inputSampleRate === 0) inputSampleRate = result.sampleRate;
         else if (result.sampleRate !== inputSampleRate) {
           writeLog(
             "error",
             "vad",
             "received frame with a different sample rate",
-            this.processor.diagnosticFields({
+            this.native.diagnosticFields({
               sampleRate: inputSampleRate,
               receivedSampleRate: result.sampleRate,
             }),

@@ -50,6 +50,19 @@ def _frame(
     )
 
 
+def _push_audio(stream: agents.vad.VADStream, audio: np.ndarray) -> None:
+    for start in range(0, audio.size, SAMPLES_PER_FRAME):
+        block = audio[start : start + SAMPLES_PER_FRAME]
+        stream.push_frame(
+            rtc.AudioFrame(
+                data=block.tobytes(),
+                sample_rate=SAMPLE_RATE,
+                num_channels=1,
+                samples_per_channel=block.size,
+            )
+        )
+
+
 @pytest.fixture(scope="module")
 def vad_model() -> ai_coustics.Model:
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -79,13 +92,11 @@ async def test_real_vad_stream_emits_livekit_inference_events(
     silence = np.zeros(input_samples_per_frame, dtype=np.int16)
     for _ in range(10):
         stream.push_frame(
-            detector.processor._process(
-                rtc.AudioFrame(
-                    data=silence.tobytes(),
-                    sample_rate=input_sample_rate,
-                    num_channels=1,
-                    samples_per_channel=input_samples_per_frame,
-                )
+            rtc.AudioFrame(
+                data=silence.tobytes(),
+                sample_rate=input_sample_rate,
+                num_channels=1,
+                samples_per_channel=input_samples_per_frame,
             )
         )
     stream.end_input()
@@ -124,18 +135,7 @@ async def test_real_vad_stream_detects_and_buffers_recorded_speech(
             np.zeros(SAMPLE_RATE, dtype=np.int16),
         ]
     )
-    for start in range(0, audio.size, SAMPLES_PER_FRAME):
-        block = audio[start : start + SAMPLES_PER_FRAME]
-        stream.push_frame(
-            detector.processor._process(
-                rtc.AudioFrame(
-                    data=block.tobytes(),
-                    sample_rate=SAMPLE_RATE,
-                    num_channels=1,
-                    samples_per_channel=block.size,
-                )
-            )
-        )
+    _push_audio(stream, audio)
     stream.end_input()
 
     events = [event async for event in stream]
@@ -151,6 +151,39 @@ async def test_real_vad_stream_detects_and_buffers_recorded_speech(
     assert all(frame.sample_rate == SAMPLE_RATE for frame in ends[0].frames)
     buffered_speech = b"".join(bytes(frame.data) for frame in ends[0].frames)
     assert speech.tobytes() in buffered_speech
+
+
+@pytest.mark.skipif(not LICENSE, reason="AIC_SDK_LICENSE is required")
+@pytest.mark.asyncio
+async def test_real_vad_sequential_streams_share_one_native_vad(
+    vad_model: ai_coustics.Model,
+) -> None:
+    detector = ai_coustics.VAD(
+        model=vad_model,
+        vad_parameters=ai_coustics.VADParameters(
+            sensitivity=0.5,
+            speech_hold_duration=0.1,
+            minimum_speech_duration=0.0,
+        ),
+    )
+    native = detector._idle[0]
+    audio = np.concatenate(
+        [
+            np.zeros(SAMPLE_RATE // 2, dtype=np.int16),
+            _recorded_speech_fixture(),
+            np.zeros(SAMPLE_RATE, dtype=np.int16),
+        ]
+    )
+
+    for _ in range(2):
+        stream = detector.stream()
+        _push_audio(stream, audio)
+        stream.end_input()
+        events = [event async for event in stream]
+        assert any(event.type == agents.vad.VADEventType.START_OF_SPEECH for event in events)
+
+    assert detector._idle == [native]
+    assert not detector._active
 
 
 @pytest.mark.skipif(not LICENSE, reason="AIC_SDK_LICENSE is required")

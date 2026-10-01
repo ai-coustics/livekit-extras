@@ -21,6 +21,7 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://127.0.0.1:7880")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
 VAD_MODEL_ID = os.getenv("AIC_INTEGRATION_VAD_MODEL_ID", "vad-2.1-xxs-16khz")
+ANALYSIS_MODEL_ID = os.getenv("AIC_INTEGRATION_ANALYSIS_MODEL_ID", "tyto-1.1-l-16khz")
 MODEL_DIR = Path(os.getenv("AIC_INTEGRATION_MODEL_DIR", "~/.cache/aic-sdk/models")).expanduser()
 
 INPUT_SAMPLE_RATE = 16_000
@@ -33,6 +34,12 @@ LICENSE_GRACE_PERIOD_SECONDS = 10.0
 def vad_model() -> ai_coustics.Model:
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     return ai_coustics.Model.from_file(ai_coustics.Model.download(VAD_MODEL_ID, MODEL_DIR))
+
+
+@pytest.fixture(scope="module")
+def analysis_model() -> ai_coustics.Model:
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    return ai_coustics.Model.from_file(ai_coustics.Model.download(ANALYSIS_MODEL_ID, MODEL_DIR))
 
 
 def _token(*, identity: str, room_name: str, agent_participant: bool = False) -> str:
@@ -94,12 +101,14 @@ async def _publish_test_signal(source: rtc.AudioSource, *, until: float) -> None
 @pytest.mark.asyncio
 async def test_vad_runs_in_a_real_agent_room_after_license_grace_period(
     vad_model: ai_coustics.Model,
+    analysis_model: ai_coustics.Model,
 ) -> None:
     room_name = f"ai-coustics-e2e-{uuid.uuid4().hex[:12]}"
     agent_room = rtc.Room()
     publisher_room = rtc.Room()
     created_at = time.monotonic()
     detector = ai_coustics.VAD(model=vad_model)
+    analyzer = ai_coustics.Analyzer(model=analysis_model)
     # LiveKit emits VAD metrics only after successful inference events.
     metrics_times: list[float] = []
     detector.on("metrics_collected", lambda _: metrics_times.append(time.monotonic()))
@@ -124,7 +133,7 @@ async def test_vad_runs_in_a_real_agent_room_after_license_grace_period(
                     sample_rate=INPUT_SAMPLE_RATE,
                     num_channels=1,
                     frame_size_ms=50,
-                    noise_cancellation=detector.processor,
+                    noise_cancellation=analyzer.collector,
                     auto_gain_control=False,
                 ),
                 audio_output=False,
@@ -155,11 +164,10 @@ async def test_vad_runs_in_a_real_agent_room_after_license_grace_period(
     finally:
         if session_started:
             await session.aclose()
-        else:
-            detector.processor._close()
+        await analyzer.aclose()
         if source is not None:
             await source.aclose()
         await publisher_room.disconnect()
         await agent_room.disconnect()
 
-    assert detector.processor._closed, "RoomIO did not close its owned frame processor"
+    assert not detector._active, "a VAD stream did not release its native VAD"

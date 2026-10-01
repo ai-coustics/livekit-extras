@@ -1,4 +1,4 @@
-import { VADEventType, initializeLogger } from "@livekit/agents";
+import { VADEventType, initializeLogger, type VADStream } from "@livekit/agents";
 import { AudioFrame } from "@livekit/rtc-node";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -67,6 +67,13 @@ function frame(index: number): AudioFrame {
   return new AudioFrame(data, sampleRate, 1, samplesPerFrame);
 }
 
+function pushAudio(stream: VADStream, audio: Int16Array): void {
+  for (let start = 0; start < audio.length; start += samplesPerFrame) {
+    const block = audio.slice(start, start + samplesPerFrame);
+    stream.pushFrame(new AudioFrame(block, sampleRate, 1, block.length));
+  }
+}
+
 describeIf("native VAD integration", () => {
   let model: ReturnType<typeof Model.fromFile>;
 
@@ -86,13 +93,11 @@ describeIf("native VAD integration", () => {
 
     for (let index = 0; index < 10; index += 1) {
       stream.pushFrame(
-        detector.processor.process(
-          new AudioFrame(
-            new Int16Array(inputSamplesPerFrame),
-            inputSampleRate,
-            1,
-            inputSamplesPerFrame,
-          ),
+        new AudioFrame(
+          new Int16Array(inputSamplesPerFrame),
+          inputSampleRate,
+          1,
+          inputSamplesPerFrame,
         ),
       );
     }
@@ -130,12 +135,7 @@ describeIf("native VAD integration", () => {
     const audio = new Int16Array(sampleRate / 2 + speech.length + sampleRate);
     audio.set(speech, sampleRate / 2);
 
-    for (let start = 0; start < audio.length; start += samplesPerFrame) {
-      const block = audio.slice(start, start + samplesPerFrame);
-      stream.pushFrame(
-        detector.processor.process(new AudioFrame(block, sampleRate, 1, block.length)),
-      );
-    }
+    pushAudio(stream, audio);
     stream.endInput();
     const events = [];
     for await (const event of stream) events.push(event);
@@ -160,6 +160,35 @@ describeIf("native VAD integration", () => {
     );
     const speechBytes = Buffer.from(speech.buffer, speech.byteOffset, speech.byteLength);
     expect(bufferedBytes.indexOf(speechBytes)).toBeGreaterThanOrEqual(0);
+  }, 120_000);
+
+  it("shares one native VAD across sequential streams", async () => {
+    const detector = new VAD({
+      model,
+      vadParameters: {
+        sensitivity: 0.5,
+        speechHoldDuration: 0.1,
+        minimumSpeechDuration: 0,
+      },
+    });
+    const native = detector["idle"][0];
+    const speech = recordedSpeechFixture();
+    const audio = new Int16Array(sampleRate / 2 + speech.length + sampleRate);
+    audio.set(speech, sampleRate / 2);
+
+    for (let run = 0; run < 2; run += 1) {
+      const stream = detector.stream();
+      pushAudio(stream, audio);
+      stream.endInput();
+      const events = [];
+      for await (const event of stream) events.push(event);
+      expect(events.some((event) => event.type === VADEventType.START_OF_SPEECH)).toBe(true);
+    }
+
+    expect(detector["idle"]).toHaveLength(1);
+    expect(detector["idle"][0]).toBe(native);
+    expect(detector["active"].size).toBe(0);
+    await detector.close();
   }, 120_000);
 });
 

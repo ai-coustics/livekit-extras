@@ -4,8 +4,7 @@ This repository contains the ai-coustics-maintained Python and Node.js integrati
 [LiveKit Agents](https://docs.livekit.io/agents/). They are thin wrappers around the public
 ai-coustics SDKs and let LiveKit agents use:
 
-- `VAD` for voice activity detection with a dedicated SDK VAD model, through `vad.processor` and
-  LiveKit's streaming VAD interface.
+- `VAD` for voice activity detection with a dedicated SDK VAD model, as a drop-in LiveKit VAD.
 - `Analyzer` for periodic audio-quality analysis.
 
 Applications choose and provision the SDK models themselves. This keeps model selection, storage,

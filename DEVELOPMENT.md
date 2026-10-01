@@ -18,24 +18,41 @@ Audio format initialization is lazy because LiveKit supplies the complete stream
 first frame. aic-sdk 3.3 for Python and 0.25 for Node process mono audio only, so multichannel
 LiveKit frames are downmixed before they reach the SDK.
 
-Both frame processors return the original LiveKit frame, so SDK errors never stop room audio. The
-VAD processor attaches an inference error to the frame's metadata and the VAD stream reports it; the
-Collector logs the error and keeps passing audio through. Logs use LiveKit's logging path and
-include the model, stream identity when available, and audio format. The Node implementation falls
-back to the console for operational messages when LiveKit has not initialized its logger.
+The Collector returns the original LiveKit frame, so SDK errors never stop room audio; it logs the
+error and keeps passing audio through. The VAD is not in the room audio path. A VAD stream that
+hits an SDK error logs it and fails, and its native VAD is terminated instead of returned to the
+pool. Logs use LiveKit's logging path and include the model, stream identity when available, and
+audio format. The Node implementation falls back to the console for operational messages when
+LiveKit has not initialized its logger.
 
-Each `VAD` owns one synchronous native SDK VAD and exposes it through a pass-through
-`vad.processor`. That processor must be installed in RoomIO's `noise_cancellation` slot. It
-downmixes and reblocks original input audio, runs inference once, and attaches immutable
-per-block results to the frame's userdata. Every LiveKit `VADStream` consumes the same results, so
-creating additional streams does not create native VADs or repeat inference. A missing-metadata
-diagnostic identifies configurations that forgot to install `vad.processor`.
+Each `VAD` keeps a pool of synchronous native SDK VADs and needs nothing in RoomIO's
+`noise_cancellation` slot. A LiveKit `VADStream` takes one native VAD for its whole lifetime,
+downmixes and reblocks the frames AgentSession pushes, and runs inference on them. Those frames
+come after the `noise_cancellation` slot, so the VAD runs on processed audio when an enhancer is
+installed there. This departs from the SDK guidance to feed a VAD original audio. We accept it so
+the VAD behaves like LiveKit's own VADs and works with any noise cancellation.
 
-Streams independently derive LiveKit inference and speech transition events from the shared
-snapshots. Event durations and speech lookback account for the SDK's prediction delay, while raw
-mono PCM stored in each snapshot keeps candidate audio aligned even when a later frame processor
-replaces the frame's audio. Closing a stream does not terminate the shared SDK session; RoomIO
-closes `vad.processor`.
+A closed stream returns its native VAD to the pool without a reset, along with any leftover
+partial block. LiveKit closes the old stream before it creates a replacement, after a flush-driven
+recreation or an agent handoff. The replacement therefore continues on the same native VAD with
+the model's history and no new SDK session. A flush resets only the stream's event state, never the
+model. Concurrent streams each hold their own native VAD, for example AudioRecognition's stream and
+the STT `StreamAdapter`'s stream for a non-streaming STT. The number of SDK sessions equals the
+largest number of concurrent streams. Because the handover keeps history, all streams of one `VAD`
+must see the same audio, so use one `VAD` per AgentSession. Streams receive no stream information,
+so a RoomIO track switch within one stream does not reset the model.
+
+LiveKit never closes a VAD, only its streams. The first stream created inside a job registers a job
+shutdown callback. It terminates the idle native VADs and makes later releases terminate instead of
+pooling. Each LiveKit executor runs a single job, so the pool needs no per-job bookkeeping. Outside
+a job, a native VAD ends its SDK session when it is destroyed; Node's `VAD.close()` also terminates
+the pool. Python acquires the native VAD inside the stream's task, because a stream closed before
+its task starts never runs the task body. Node acquires it in `stream()` and releases it
+synchronously in `close()`, because LiveKit creates the replacement stream right after `close()`
+returns.
+
+Streams derive LiveKit inference and speech transition events from per-block snapshots. Event
+durations and speech lookback account for the SDK's prediction delay.
 
 The wrapper overrides the model-specific SDK duration defaults with LiveKit-compatible values:
 50 ms minimum speech and a 250 ms speech hold. The latter satisfies the minimum silence required
@@ -50,8 +67,8 @@ mono float32, buffers it, and returns the original frame unchanged. Stream bound
 analyzer. Closing either the analyzer or its collector stops scheduling and terminates the SDK
 telemetry session.
 
-RoomIO accepts one `noise_cancellation` frame processor, so a session uses either `vad.processor`
-or `analyzer.collector`. The packages do not provide a way to combine them.
+RoomIO accepts one `noise_cancellation` frame processor. The VAD needs none, so the slot can hold
+`analyzer.collector` or an enhancer next to the VAD. The collector and an enhancer cannot share it.
 
 Python schedules inference with an asyncio task and runs each blocking `analyze_buffered()` call
 through `asyncio.to_thread()`. Shutdown waits for an active inference before terminating the SDK
@@ -120,8 +137,8 @@ stream.
 
 An Analyzer is a side-channel consumer rather than an audio transform. The current workaround is
 a pass-through `FrameProcessor` in RoomIO's single `noise_cancellation` slot. This couples
-observation to the transform path and leaves no room for the VAD processor or an enhancement
-processor in the same session. Making `Analyzer` itself delegate the FrameProcessor interface would
+observation to the transform path and leaves no room for an enhancement processor in the same
+session. Making `Analyzer` itself delegate the FrameProcessor interface would
 permit the minor `noise_cancellation=analyzer` shortcut, but would duplicate the collector's public
 role; keep the explicit collector unless an upstream interface makes the ownership model clearer.
 
@@ -283,13 +300,14 @@ synthetic microphone publisher
   -> LiveKit server
   -> agent RoomIO
   -> rtc.AudioStream
-  -> ai-coustics VAD processor
+  -> ai-coustics Analyzer collector
   -> AgentSession
+  -> ai-coustics VAD stream
 ```
 
-They verify that the `AgentSession` consumes the SDK-backed VAD, VAD inference keeps succeeding
-after the SDK authentication grace period, and RoomIO closes `vad.processor` during session
-teardown.
+They verify that the `AgentSession` consumes the SDK-backed VAD while `analyzer.collector` holds
+the `noise_cancellation` slot, that VAD inference keeps succeeding after the SDK authentication
+grace period, and that every VAD stream returns its native VAD when the session closes.
 
 Start LiveKit in a separate terminal. A native server is the simplest option on macOS; Linux can
 use either the native server or the container:
