@@ -43,15 +43,9 @@ class _InferenceResult:
 
 
 @dataclass(frozen=True)
-class _InferenceError:
-    message: str
-    cause: Exception
-
-
-@dataclass(frozen=True)
 class _FrameMetadata:
     results: tuple[_InferenceResult, ...] = ()
-    error: _InferenceError | None = None
+    error: Exception | None = None
 
 
 class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
@@ -139,12 +133,7 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             results = self._process_frame(frame)
             metadata = _FrameMetadata(results=tuple(results))
         except Exception as error:
-            metadata = _FrameMetadata(
-                error=_InferenceError(
-                    message=str(error),
-                    cause=error.__cause__ if isinstance(error.__cause__, Exception) else error,
-                )
-            )
+            metadata = _FrameMetadata(error=error)
 
         frame.userdata[_FRAME_USERDATA_VAD_ATTRIBUTE] = metadata
         return frame
@@ -510,7 +499,9 @@ class VADStream(agents.vad.VADStream):
                 continue
             self._missing_metadata_frames = 0
             if metadata.error is not None:
-                raise RuntimeError(metadata.error.message) from metadata.error.cause
+                error = metadata.error
+                cause = error.__cause__ if isinstance(error.__cause__, Exception) else error
+                raise RuntimeError(str(error)) from cause
 
             for result in metadata.results:
                 if not input_sample_rate:

@@ -54,14 +54,9 @@ interface InferenceResult {
   predictionDelaySamples: number;
 }
 
-interface InferenceError {
-  message: string;
-  cause: unknown;
-}
-
 interface FrameMetadata {
   results: readonly InferenceResult[];
-  error?: InferenceError;
+  error?: unknown;
 }
 
 /** Pass-through processor that runs one SDK VAD and annotates input frames. */
@@ -138,10 +133,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
     try {
       metadata = { results: this.processFrame(frame) };
     } catch (error) {
-      metadata = {
-        results: [],
-        error: { message: errorDetail(error), cause: error },
-      };
+      metadata = { results: [], error };
     }
     frame.userdata[FRAME_USERDATA_VAD_ATTRIBUTE] = metadata;
     return frame;
@@ -595,8 +587,8 @@ class AicVADStream extends LiveKitVADStream {
         continue;
       }
       this.missingMetadataFrames = 0;
-      if (metadata.error) {
-        throw new Error(metadata.error.message, { cause: metadata.error.cause });
+      if (metadata.error !== undefined) {
+        throw new Error(errorDetail(metadata.error), { cause: metadata.error });
       }
 
       for (const result of metadata.results) {
