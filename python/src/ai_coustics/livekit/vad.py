@@ -142,9 +142,8 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         context = self._context
         mono = _mono_pcm16(frame)
 
-        inference_block_size = self._model.get_optimal_block_size(frame.sample_rate)
-        stream_format = (frame.sample_rate, inference_block_size)
-        if self._format != stream_format:
+        if self._format is None or self._format[0] != frame.sample_rate:
+            inference_block_size = self._model.get_optimal_block_size(frame.sample_rate)
             try:
                 native_vad.initialize(
                     aic_sdk.ProcessorConfig(
@@ -159,9 +158,11 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                     f"(model={self._model_id}, sample_rate={frame.sample_rate}, "
                     f"block_size={inference_block_size}): {error}"
                 ) from error
-            self._format = stream_format
+            self._format = (frame.sample_rate, inference_block_size)
             self._inference_buffer.clear()
             self._prediction_delay_samples = context.get_prediction_delay()
+        else:
+            inference_block_size = self._format[1]
 
         self._inference_buffer.extend(mono.tobytes())
         results: list[_InferenceResult] = []

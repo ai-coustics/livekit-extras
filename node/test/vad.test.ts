@@ -60,6 +60,8 @@ const sdk = vi.hoisted(() => {
   }
 
   class FakeModel {
+    readonly queriedSampleRates: number[] = [];
+
     constructor(
       readonly sampleRate = 16_000,
       readonly blockSize = 160,
@@ -74,6 +76,7 @@ const sdk = vi.hoisted(() => {
     }
 
     getOptimalBlockSize(sampleRate: number): number {
+      this.queriedSampleRates.push(sampleRate);
       return Math.round((this.blockSize * sampleRate) / this.sampleRate);
     }
 
@@ -401,6 +404,30 @@ describe("VAD", () => {
     expect(native.blocks).toHaveLength(1);
     expect(native.blocks[0]).toEqual([2000, 3000, 4000, 5000].map((sample) => sample / 32768));
     expect(events[0]!.frames[0]!.channels).toBe(1);
+  });
+
+  it("reinitializes only when the input sample rate changes", () => {
+    const model = new sdk.FakeModel(16_000, 4);
+    const vad = new VAD({ model, licenseKey: "test-license" });
+    const native = sdk.instances[0]!;
+    model.queriedSampleRates.length = 0;
+
+    for (const [samples, sampleRate] of [
+      [3, 16_000],
+      [7, 16_000],
+      [2, 16_000],
+      [12, 48_000],
+      [12, 48_000],
+    ] as const) {
+      vad.processor.process(makeFrame(new Int16Array(samples), sampleRate));
+    }
+
+    expect(model.queriedSampleRates).toEqual([16_000, 48_000]);
+    expect(native.initializations).toEqual([
+      [16_000, 4, false],
+      [48_000, 12, false],
+    ]);
+    expect(native.blocks.map((block) => block.length)).toEqual([4, 4, 4, 12, 12]);
   });
 
   it("caps contiguous speech and keeps the rolling prefix current", async () => {

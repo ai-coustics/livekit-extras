@@ -161,13 +161,9 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
     const context = this.context;
     const mono = monoPcm16(frame);
 
-    const inferenceBlockSize = this.model.getOptimalBlockSize(frame.sampleRate);
-    const nextFormat: [number, number] = [frame.sampleRate, inferenceBlockSize];
-    if (
-      !this.format ||
-      this.format[0] !== nextFormat[0] ||
-      this.format[1] !== nextFormat[1]
-    ) {
+    let inferenceBlockSize: number;
+    if (!this.format || this.format[0] !== frame.sampleRate) {
+      inferenceBlockSize = this.model.getOptimalBlockSize(frame.sampleRate);
       try {
         nativeVad.initialize(frame.sampleRate, inferenceBlockSize, false);
       } catch (error) {
@@ -178,9 +174,11 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
           { cause: error },
         );
       }
-      this.format = nextFormat;
+      this.format = [frame.sampleRate, inferenceBlockSize];
       this.inferenceBuffer = new Int16Array(0);
       this.predictionDelaySamples = context.getPredictionDelay();
+    } else {
+      inferenceBlockSize = this.format[1];
     }
 
     const buffered = new Int16Array(this.inferenceBuffer.length + mono.length);

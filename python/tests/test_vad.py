@@ -18,6 +18,7 @@ class FakeModel:
     def __init__(self, *, sample_rate: int = 16000, block_size: int = 160) -> None:
         self.sample_rate = sample_rate
         self.block_size = block_size
+        self.queried_sample_rates: list[int] = []
 
     def get_id(self) -> str:
         return "vad-test-model"
@@ -26,6 +27,7 @@ class FakeModel:
         return self.sample_rate
 
     def get_optimal_block_size(self, sample_rate: int) -> int:
+        self.queried_sample_rates.append(sample_rate)
         return round(self.block_size * sample_rate / self.sample_rate)
 
 
@@ -555,6 +557,25 @@ async def test_uses_input_sample_rate_without_plugin_resampling() -> None:
         np.frombuffer(events[0].frames[0].data, dtype=np.int16),
         input_samples,
     )
+
+
+def test_reinitializes_only_when_the_input_sample_rate_changes() -> None:
+    model = FakeModel(block_size=4)
+    vad = create_vad(model=model)
+    native = FakeVad.instances[0]
+    model.queried_sample_rates.clear()
+
+    for samples, sample_rate in ((3, 16000), (7, 16000), (2, 16000), (12, 48000), (12, 48000)):
+        vad.processor._process(
+            make_frame(np.zeros(samples, dtype=np.int16), sample_rate=sample_rate)
+        )
+
+    assert model.queried_sample_rates == [16000, 48000]
+    assert [(config.sample_rate, config.block_size) for config in native.initialized_configs] == [
+        (16000, 4),
+        (48000, 12),
+    ]
+    assert [block.size for block in native.blocks] == [4, 4, 4, 12, 12]
 
 
 @pytest.mark.asyncio
