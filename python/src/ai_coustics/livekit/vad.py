@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-import weakref
 from collections import deque
 from dataclasses import dataclass
 
@@ -286,7 +285,6 @@ class VAD(agents.vad.VAD):
             speech_hold_duration=_DEFAULT_SPEECH_HOLD_DURATION,
             minimum_speech_duration=_DEFAULT_MINIMUM_SPEECH_DURATION,
         )
-        self._streams: weakref.WeakSet[VADStream] = weakref.WeakSet()
         self._processor = VADProcessor(model=model, license_key=_license_key(license_key))
         self._default_speech_hold_duration = self._processor.context.get_parameter(
             aic_sdk.VadParameter.SpeechHoldDuration
@@ -316,14 +314,7 @@ class VAD(agents.vad.VAD):
         return self._default_speech_hold_duration
 
     def stream(self) -> VADStream:
-        stream = VADStream(
-            self,
-            processor=self._processor,
-            prefix_padding_duration=self._prefix_padding_duration,
-            max_buffered_speech=self._max_buffered_speech,
-        )
-        self._streams.add(stream)
-        return stream
+        return VADStream(self)
 
     def set_parameters(self, parameters: VADParameters) -> None:
         if parameters.sensitivity is not None and self._apply_parameter(
@@ -367,17 +358,10 @@ class VAD(agents.vad.VAD):
 
 
 class VADStream(agents.vad.VADStream):
-    def __init__(
-        self,
-        vad: VAD,
-        *,
-        processor: VADProcessor,
-        prefix_padding_duration: float,
-        max_buffered_speech: float,
-    ) -> None:
-        self._processor = processor
-        self._prefix_padding_duration = prefix_padding_duration
-        self._max_buffered_speech = max_buffered_speech
+    def __init__(self, vad: VAD) -> None:
+        self._processor = vad.processor
+        self._prefix_padding_duration = vad._prefix_padding_duration
+        self._max_buffered_speech = vad._max_buffered_speech
         self._missing_metadata_frames = 0
         super().__init__(vad)
 
