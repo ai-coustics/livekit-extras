@@ -642,4 +642,111 @@ describe("VAD", () => {
         }),
     ).toThrow(message);
   });
+
+  it("disabled processor passes frames through without inference", () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(16_000, 4),
+      licenseKey: "test-license",
+    });
+    const native = sdk.instances[0]!;
+    vad.processor.process(makeFrame(new Int16Array([1, 2, 3])));
+
+    vad.processor.setEnabled(false);
+    const frame = makeFrame(new Int16Array([4, 5, 6, 7]));
+    expect(vad.processor.process(frame)).toBe(frame);
+    expect(frame.userdata).toEqual({});
+    expect(native.blocks).toEqual([]);
+
+    vad.processor.setEnabled(true);
+    expect(native.context.resetCount).toBe(1);
+    vad.processor.process(makeFrame(new Int16Array([8, 9, 10, 11])));
+
+    expect(native.initializations).toEqual([
+      [16_000, 4, false],
+      [16_000, 4, false],
+    ]);
+    expect(native.blocks).toEqual([[8, 9, 10, 11].map((sample) => sample / 32768)]);
+  });
+
+  it("stream info change resets processor", () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    const context = sdk.instances[0]!.context;
+    const info = { roomName: "room", participantIdentity: "participant", publicationSid: "TR_test" };
+
+    vad.processor.onStreamInfoUpdated({ ...info });
+    vad.processor.onStreamInfoUpdated({ ...info });
+    expect(context.resetCount).toBe(0);
+    vad.processor.onStreamInfoUpdated({ ...info, publicationSid: "TR_other" });
+    expect(context.resetCount).toBe(1);
+    vad.processor.onStreamInfoCleared();
+    expect(context.resetCount).toBe(2);
+    vad.processor.onStreamInfoCleared();
+    expect(context.resetCount).toBe(2);
+  });
+
+  it("closed processor passes frames and rejects parameters", () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    const context = sdk.instances[0]!.context;
+    const warning = vi.spyOn(log(), "warn");
+    vad.processor.close();
+
+    vad.setParameters({ sensitivity: 0.8 });
+    const frame = makeFrame(new Int16Array(160));
+
+    expect(context.getParameter(sdk.VadParameter.Sensitivity)).toBe(0.5);
+    expect(warning).toHaveBeenCalledWith(
+      expect.anything(),
+      "VAD: parameter rejected; keeping the current value",
+    );
+    expect(vad.processor.process(frame)).toBe(frame);
+    expect(frame.userdata).toEqual({});
+    warning.mockRestore();
+  });
+
+  it("missing metadata error logs once per run", async () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    const stream = vad.stream();
+    const errorLog = vi.spyOn(log(), "error");
+
+    for (let index = 0; index < 25; index += 1) {
+      stream.pushFrame(makeFrame(new Int16Array(160)));
+    }
+    pushProcessed(vad, stream, makeFrame(new Int16Array(160)));
+    for (let index = 0; index < 10; index += 1) {
+      stream.pushFrame(makeFrame(new Int16Array(160)));
+    }
+    await collectEvents(stream);
+
+    expect(
+      errorLog.mock.calls.filter(([, message]) =>
+        message.startsWith("VAD: no inference metadata found"),
+      ),
+    ).toHaveLength(2);
+    errorLog.mockRestore();
+  });
+
+  it("closes open streams and the shared session on VAD close", async () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    const stream = vad.stream();
+    const native = sdk.instances[0]!;
+
+    await vad.close();
+    expect((await stream.next()).done).toBe(true);
+    expect(native.terminateCalls).toBe(1);
+
+    await vad.close();
+    expect(native.terminateCalls).toBe(1);
+  });
 });
