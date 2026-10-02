@@ -14,16 +14,17 @@ and deployment under application control while the plugins handle LiveKit audio 
 lifecycle, observability, and error recovery.
 
 > [!IMPORTANT]
-> The official LiveKit plugins are the recommended integration path for most applications. They
-> support LiveKit Cloud, integrate more deeply with the LiveKit ecosystem and tooling, and offer
-> stronger stability guarantees. Avoiding breaking changes is an explicit goal of the official
-> plugins.
->
-> The ai-coustics-maintained plugins in this repository follow a faster release cadence and are
-> designed for teams that want early access to the latest ai-coustics models and product features.
-> Some of those capabilities may be experimental and subject to change, and use of these plugins is
-> billed separately through ai-coustics. Choose them when early adoption of new ai-coustics
-> capabilities is important for your application.
+> Use the official LiveKit plugin for ai-coustics speech enhancement. ai-coustics LiveKit extras
+> adds product categories that the official plugin does not support yet. Features here can change
+> between releases. Usage is billed through ai-coustics.
+
+## What ships here and what moves
+
+| Feature | Where to get it |
+| --- | --- |
+| Voice activity detection (`VAD`) | Here for now; planned to move to the official plugin |
+| Audio-quality analysis (Tyto `Analyzer`) | Here |
+| Speech enhancement | Official plugin only |
 
 ## Packages
 
