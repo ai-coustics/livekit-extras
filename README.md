@@ -22,8 +22,8 @@ lifecycle, observability, and error recovery.
 
 | Feature | ai-coustics LiveKit extras | Official LiveKit plugin |
 | --- | --- | --- |
-| Speech enhancement | No | Yes |
-| Voice activity detection (`VAD`) | Yes | No |
+| Speech Enhancement | No | Yes |
+| Voice Activity Detection (`VAD`) | Yes | No |
 | Audio Insight (Tyto `Analyzer`) | Yes | No |
 
 ## Packages
