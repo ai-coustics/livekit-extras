@@ -59,8 +59,9 @@ const analysisModel = Model.fromFile(analysisPath);
 
 ## Usage
 
-RoomIO accepts one frame processor in its `noiseCancellation` slot. A session installs either
-`vad.processor` or `analyzer.collector` there.
+RoomIO accepts one frame processor in its `noiseCancellation` slot. Install `vad.processor` or
+`analyzer.collector` there directly, or combine them with `FrameProcessorChain` as described in
+[Combining frame processors](#combining-frame-processors).
 
 ### Voice activity detection
 
@@ -114,6 +115,30 @@ installing its collector does not feed it any room audio. RoomIO closes the coll
 the analyzer, when the input stream ends.
 
 Results are not logged by the plugin; log or handle them in the callback.
+
+### Combining frame processors
+
+Use `FrameProcessorChain` to run any number of processors in the same RoomIO audio path. For
+example, this runs VAD inference and analysis in one session:
+
+```ts
+import { FrameProcessorChain } from "@ai-coustics/livekit-extras";
+
+const frameProcessor = new FrameProcessorChain(vad.processor, analyzer.collector);
+
+await session.start({
+  // ... agent, room
+  inputOptions: { noiseCancellation: frameProcessor },
+});
+```
+
+`FrameProcessorChain` runs its processors in order. Keep `vad.processor` first: it annotates the
+original frame while preserving its audio. We recommend placing `analyzer.collector` before any
+processor that changes the audio; measuring raw input makes it easier to understand how input audio
+quality affects the rest of the pipeline.
+
+This still uses LiveKit's `noiseCancellation` slot as a temporary integration. RoomIO owns the
+chain and closes `vad.processor`, the collector, and the analyzer together.
 
 ## Configuration
 

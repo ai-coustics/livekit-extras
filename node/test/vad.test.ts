@@ -139,7 +139,7 @@ vi.mock("@ai-coustics/aic-sdk", () => ({
   _setSdkId: (id: number) => sdk.nativeCalls.push(["sdk_id", id]),
 }));
 
-import { VAD, VADParameters } from "../src/index.js";
+import { FrameProcessorChain, VAD, VADParameters } from "../src/index.js";
 
 initializeLogger({ pretty: false, level: "silent" });
 
@@ -574,9 +574,10 @@ describe("VAD", () => {
     const stream = vad.stream();
     const native = sdk.instances[0]!;
     native.predictions.push([0.9, true]);
+    const chain = new FrameProcessorChain(vad.processor, new MutingProcessor());
     const raw = new Int16Array([1000, 2000, 3000, 4000]);
 
-    const output = new MutingProcessor().process(vad.processor.process(makeFrame(raw)));
+    const output = chain.process(makeFrame(raw));
     stream.pushFrame(output);
     const events = await collectEvents(stream);
 

@@ -35,7 +35,7 @@ Streams independently derive LiveKit inference and speech transition events from
 snapshots. Event durations and speech lookback account for the SDK's prediction delay, while raw
 mono PCM stored in each snapshot keeps candidate audio aligned even when a later frame processor
 replaces the frame's audio. Closing a stream does not terminate the shared SDK session; RoomIO
-closes `vad.processor`.
+closes `vad.processor` directly or through `FrameProcessorChain`.
 
 The wrapper overrides the model-specific SDK duration defaults with LiveKit-compatible values:
 50 ms minimum speech and a 250 ms speech hold. The latter satisfies the minimum silence required
@@ -50,8 +50,13 @@ mono float32, buffers it, and returns the original frame unchanged. Stream bound
 analyzer. Closing either the analyzer or its collector stops scheduling and terminates the SDK
 telemetry session.
 
-RoomIO accepts one `noise_cancellation` frame processor, so a session uses either `vad.processor`
-or `analyzer.collector`. The packages do not provide a way to combine them.
+RoomIO accepts one `noise_cancellation` frame processor. `FrameProcessorChain` lets
+`vad.processor`, `analyzer.collector`, and other frame processors share it. It applies its enabled
+processors in constructor order and forwards the stream-info lifecycle hooks to all of them. It
+does not forward the credential hooks. Closing the chain is idempotent and closes every child, then
+raises the first child error. Place `vad.processor` and `analyzer.collector` before any processor
+that changes the audio: analyzing original input audio helps explain how its quality affects the
+rest of the pipeline.
 
 Python schedules inference with an asyncio task and runs each blocking `analyze_buffered()` call
 through `asyncio.to_thread()`. Shutdown waits for an active inference before terminating the SDK
@@ -119,11 +124,12 @@ loudness, interfering speech, noise, codec-degradation, and packet-loss scores. 
 stream.
 
 An Analyzer is a side-channel consumer rather than an audio transform. The current workaround is
-a pass-through `FrameProcessor` in RoomIO's single `noise_cancellation` slot. This couples
-observation to the transform path and leaves no room for the VAD processor or an enhancement
-processor in the same session. Making `Analyzer` itself delegate the FrameProcessor interface would
-permit the minor `noise_cancellation=analyzer` shortcut, but would duplicate the collector's public
-role; keep the explicit collector unless an upstream interface makes the ownership model clearer.
+a pass-through `FrameProcessor` in RoomIO's single `noise_cancellation` slot.
+`FrameProcessorChain` allows it to run sequentially with other processors, but this still couples
+observation to the transform path and makes the observation point depend on Collector placement.
+Making `Analyzer` itself delegate the FrameProcessor interface would permit the minor
+`noise_cancellation=analyzer` shortcut, but would duplicate the collector's public role; keep the
+explicit collector unless an upstream interface makes the ownership model clearer.
 
 The preferred upstream solution is a generic audio observer or tap interface in LiveKit Agents.
 RoomIO or AgentSession should fan frames out to registered observers without allowing observer

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from livekit import agents, rtc
 
-from ai_coustics.livekit import VAD, VADParameters
+from ai_coustics.livekit import VAD, FrameProcessorChain, VADParameters
 
 native_calls: list[tuple[str, int | None]] = []
 
@@ -685,9 +685,10 @@ async def test_vad_audio_survives_downstream_audio_replacement() -> None:
     stream = vad.stream()
     native = FakeVad.instances[0]
     native.predictions.append((0.9, True))
+    chain = FrameProcessorChain(vad.processor, MutingProcessor())
     raw = np.array([1000, 2000, 3000, 4000], dtype=np.int16)
 
-    output = MutingProcessor()._process(vad.processor._process(make_frame(raw)))
+    output = chain._process(make_frame(raw))
     stream.push_frame(output)
     events = await collect_events(stream)
 

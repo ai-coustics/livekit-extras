@@ -82,8 +82,11 @@ downmixed to mono before it reaches the SDK.
   around an SDK collector/analyzer pair; Node uses a timer around the synchronous call on a single
   SDK `Analyzer`.
 
-RoomIO has a single `noise_cancellation` slot, so a session installs either `vad.processor` or
-`analyzer.collector`; there is no chaining helper. Shared helpers (license key, PCM conversion)
+RoomIO has a single `noise_cancellation` slot. **`FrameProcessorChain`**
+(`frame_processor_chain.py` / `.ts`) lets `vad.processor` and `analyzer.collector` share it. Order
+matters: `vad.processor` first, then `analyzer.collector`, then any processor that changes the
+audio, so VAD and analysis see original input. The chain forwards stream-info hooks to its
+children but not credential hooks. Shared helpers (license key, PCM conversion)
 live in `common.py` / `common.ts`. Node imports SDK types directly from `@ai-coustics/aic-sdk`,
 which ships its own declarations.
 

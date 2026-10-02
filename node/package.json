@@ -33,7 +33,7 @@
   "scripts": {
     "build": "tsup",
     "check": "tsc --noEmit",
-    "test": "vitest run test/analyzer.test.ts test/vad.test.ts",
+    "test": "vitest run test/analyzer.test.ts test/frame_processor_chain.test.ts test/vad.test.ts",
     "test:integration": "vitest run test/integration.test.ts",
     "test:e2e": "vitest run test/e2e-room.test.ts",
     "prepack": "npm run build"

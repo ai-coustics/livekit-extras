@@ -4,6 +4,7 @@ from aic_sdk import Model
 from livekit.agents import Plugin
 
 from .analyzer import AnalysisEvent, Analyzer, Collector
+from .frame_processor_chain import FrameProcessorChain
 from .log import logger
 from .vad import VAD, VADParameters, VADProcessor
 
@@ -25,6 +26,7 @@ __all__ = [
     "AnalysisEvent",
     "Analyzer",
     "Collector",
+    "FrameProcessorChain",
     "Model",
     "VAD",
     "VADParameters",
