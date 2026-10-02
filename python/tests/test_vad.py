@@ -258,10 +258,16 @@ def test_wraps_native_vad_construction_errors(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("chunk", [1, 7, "block", "whole"])
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=[scenario["name"] for scenario in SCENARIOS])
-async def test_replays_shared_vad_scenario(scenario: dict[str, Any]) -> None:
+async def test_replays_shared_vad_scenario(
+    scenario: dict[str, Any],
+    chunk: int | str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    model = FakeModel(**scenario["model"])
     vad = create_vad(
-        model=FakeModel(**scenario["model"]),
+        model=model,
         vad_parameters=VADParameters(**scenario.get("vad_parameters", {})),
         **{
             option: scenario[option]
@@ -274,9 +280,28 @@ async def test_replays_shared_vad_scenario(scenario: dict[str, Any]) -> None:
     native.context.prediction_delay_samples = scenario["prediction_delay_samples"]
     native.predictions.extend(tuple(prediction) for prediction in scenario["predictions"])
 
-    ramp = np.arange(scenario["input_samples"], dtype=np.int16)
-    push_processed(vad, stream, make_frame(ramp, sample_rate=scenario["input_sample_rate"]))
-    events = await collect_events(stream)
+    ramp = np.arange(sum(step.get("samples", 0) for step in scenario["inputs"]), dtype=np.int16)
+    offset = 0
+    for step in scenario["inputs"]:
+        if "flush" in step:
+            stream.flush()
+            continue
+        if isinstance(chunk, int):
+            size = chunk
+        elif chunk == "block":
+            size = model.get_optimal_block_size(step["sample_rate"])
+        else:
+            size = step["samples"]
+        samples = ramp[offset : offset + step["samples"]]
+        offset += step["samples"]
+        for start in range(0, samples.size, size):
+            frame = make_frame(samples[start : start + size], sample_rate=step["sample_rate"])
+            push_processed(vad, stream, frame)
+    events = [
+        event
+        for event in await collect_events(stream)
+        if "event_types" not in scenario or event.type.value in scenario["event_types"]
+    ]
 
     for event, expected in zip(events, scenario["events"], strict=True):
         (frame,) = event.frames
@@ -295,6 +320,13 @@ async def test_replays_shared_vad_scenario(scenario: dict[str, Any]) -> None:
             "audio_start": audio[0],
             "audio_samples": audio.size,
         } == pytest.approx(expected)
+
+    expected_logs = scenario.get("logs", [])
+    messages = [record.getMessage() for record in caplog.records]
+    assert [
+        {"message": log["message"], "count": messages.count(log["message"])}
+        for log in expected_logs
+    ] == expected_logs
 
 
 @pytest.mark.asyncio
