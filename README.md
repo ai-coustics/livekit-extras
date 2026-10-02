@@ -18,13 +18,13 @@ lifecycle, observability, and error recovery.
 > adds product categories that the official plugin does not support yet. Features here can change
 > between releases. Usage is billed through ai-coustics.
 
-## What ships here and what moves
+## Feature Availability
 
-| Feature | Where to get it |
-| --- | --- |
-| Voice activity detection (`VAD`) | Here for now; planned to move to the official plugin |
-| Audio-quality analysis (Tyto `Analyzer`) | Here |
-| Speech enhancement | Official plugin only |
+| Feature | ai-coustics LiveKit extras | Official LiveKit plugin |
+| --- | --- | --- |
+| Voice activity detection (`VAD`) | Yes | No |
+| Audio-quality analysis (Tyto `Analyzer`) | Yes | No |
+| Speech enhancement | No | Yes |
 
 ## Packages
 

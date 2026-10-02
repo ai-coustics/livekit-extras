@@ -8,13 +8,13 @@ Voice activity detection and audio-quality analysis for LiveKit Agents, backed b
 > adds product categories that the official plugin does not support yet. Features here can change
 > between releases. Usage is billed through ai-coustics.
 
-## What ships here and what moves
+## Feature Availability
 
-| Feature | Where to get it |
-| --- | --- |
-| Voice activity detection (`VAD`) | Here for now; planned to move to the official plugin |
-| Audio-quality analysis (Tyto `Analyzer`) | Here |
-| Speech enhancement | Official plugin only |
+| Feature | `@ai-coustics/livekit-extras` | `@livekit/plugins-ai-coustics` |
+| --- | --- | --- |
+| Voice activity detection (`VAD`) | Yes | No |
+| Audio-quality analysis (Tyto `Analyzer`) | Yes | No |
+| Speech enhancement | No | Yes |
 
 ## Installation
 
