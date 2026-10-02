@@ -12,9 +12,9 @@ Voice activity detection and audio-quality analysis for LiveKit Agents, backed b
 
 | Feature | `ai-coustics-livekit-extras` | `livekit-plugins-ai-coustics` |
 | --- | --- | --- |
+| Speech enhancement | No | Yes |
 | Voice activity detection (`VAD`) | Yes | No |
 | Audio-quality analysis (Tyto `Analyzer`) | Yes | No |
-| Speech enhancement | No | Yes |
 
 ## Installation
 
