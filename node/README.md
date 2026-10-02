@@ -33,8 +33,9 @@ package in the same project.
 npm install @livekit/plugins-ai-coustics @ai-coustics/livekit-extras
 ```
 
-RoomIO has one `noiseCancellation` slot. A session can put the official enhancement,
-`vad.processor`, or `analyzer.collector` there, but only one of them.
+RoomIO has one `noiseCancellation` slot. `FrameProcessorChain` lets `vad.processor` and
+`analyzer.collector` share it. Install the official enhancement in that slot on its own, because
+`FrameProcessorChain` does not pass LiveKit Cloud credentials to its processors.
 
 This package needs its own ai-coustics license, even if the official plugin uses LiveKit Cloud.
 Set `AIC_SDK_LICENSE` or pass `licenseKey`.
