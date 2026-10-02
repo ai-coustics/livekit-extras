@@ -1,6 +1,6 @@
 # ai-coustics LiveKit extras for Node.js
 
-Voice activity detection and audio-quality analysis for LiveKit Agents, backed by the public
+Voice activity detection and Audio Insight for LiveKit Agents, backed by the public
 `@ai-coustics/aic-sdk` package.
 
 > [!IMPORTANT]
@@ -14,7 +14,7 @@ Voice activity detection and audio-quality analysis for LiveKit Agents, backed b
 | --- | --- | --- |
 | Speech enhancement | No | Yes |
 | Voice activity detection (`VAD`) | Yes | No |
-| Audio-quality analysis (Tyto `Analyzer`) | Yes | No |
+| Audio Insight (Tyto `Analyzer`) | Yes | No |
 
 ## Installation
 
@@ -90,7 +90,7 @@ await session.start({
 streams read the immutable metadata it attaches to each frame, so the SDK model runs only once per
 audio block.
 
-### Audio-quality analysis
+### Audio Insight
 
 Create an `Analyzer`, install its collector in RoomIO's audio path, and subscribe to its results:
 
