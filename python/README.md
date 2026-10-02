@@ -12,8 +12,8 @@ Voice activity detection and Audio Insight for LiveKit Agents, backed by the pub
 
 | Feature | `ai-coustics-livekit-extras` | `livekit-plugins-ai-coustics` |
 | --- | --- | --- |
-| Speech enhancement | No | Yes |
-| Voice activity detection (`VAD`) | Yes | No |
+| Speech Enhancement | No | Yes |
+| Voice Activity Detection (`VAD`) | Yes | No |
 | Audio Insight (Tyto `Analyzer`) | Yes | No |
 
 ## Installation
