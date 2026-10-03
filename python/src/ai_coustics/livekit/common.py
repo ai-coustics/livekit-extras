@@ -23,7 +23,7 @@ def _mono_pcm16(frame: rtc.AudioFrame) -> np.ndarray:
     if frame.num_channels == 1:
         return samples
     channels = samples.reshape(frame.samples_per_channel, frame.num_channels)
-    # numpy < 2.5 stubs type ndarray.mean() with an axis as Any.
+    # The numpy < 2.5 stubs declare that ndarray.mean(axis=...) returns Any.
     mono: np.ndarray = np.rint(channels.mean(axis=1, dtype=np.float32)).astype(np.int16)
     return mono
 

@@ -168,7 +168,7 @@ export class Collector extends FrameProcessor<AudioFrame> {
   }
 }
 
-/** Owns an SDK analyzer and periodically reports analysis of collected room audio. */
+/** Owns an SDK analyzer, periodically analyzes collected room audio, and reports each result. */
 export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCallbacks>) {
   readonly collector: Collector;
 
