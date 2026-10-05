@@ -173,6 +173,7 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
   readonly collector: Collector;
 
   private nativeAnalyzer: AicAnalyzer | null;
+  private pendingAnalysis: Promise<void> | null = null;
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly modelId: string;
   private readonly enableMetrics: boolean;
@@ -204,17 +205,22 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
     this.nativeAnalyzer = nativeAnalyzer;
     this.enableMetrics = options.enableMetrics ?? true;
     this.collector = new Collector(nativeAnalyzer, () => this.close());
-    this.timer = setInterval(() => this.analyze(), analysisInterval * 1000);
+    // An analysis can take longer than the interval. Do not queue more analyses behind it.
+    this.timer = setInterval(() => {
+      this.pendingAnalysis ??= this.analyze().finally(() => {
+        this.pendingAnalysis = null;
+      });
+    }, analysisInterval * 1000);
     this.timer.unref?.();
   }
 
-  private analyze(): void {
+  private async analyze(): Promise<void> {
     const analyzer = this.nativeAnalyzer;
     if (!analyzer || !this.collector.initialized) return;
 
     const started = performance.now();
     try {
-      const nativeResult = analyzer.analyze();
+      const nativeResult = await analyzer.analyzeAsync();
       const elapsed = performance.now() - started;
       const result = Object.freeze({ ...nativeResult });
       this.sequence += 1;
@@ -289,6 +295,24 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
     this.collector.detach();
     const analyzer = this.nativeAnalyzer;
     this.nativeAnalyzer = null;
-    analyzer?.terminateSession();
+    if (!this.pendingAnalysis) {
+      analyzer?.terminateSession();
+      return;
+    }
+    // terminateSession() waits for the native lock, so a call during an analysis blocks the
+    // event loop.
+    void this.pendingAnalysis.then(() => {
+      try {
+        analyzer?.terminateSession();
+      } catch (error) {
+        writeLog(
+          "error",
+          "analyzer",
+          "session termination failed",
+          { modelName: this.modelId },
+          error,
+        );
+      }
+    });
   }
 }

@@ -54,7 +54,7 @@ const sdk = vi.hoisted(() => {
       this.blocks.push(Array.from(samples));
     }
 
-    analyze() {
+    async analyzeAsync() {
       this.analyzeCalls += 1;
       if (this.error) throw this.error;
       return {
@@ -175,7 +175,7 @@ describe("Analyzer", () => {
     expect(sdk.analyzers[0]!.terminateCalls).toBe(1);
   });
 
-  it("analyzes on the configured interval and emits without logging the result", () => {
+  it("analyzes on the configured interval and emits without logging the result", async () => {
     const analyzer = new Analyzer({
       model: { getId: () => "analysis-test-model" } as never,
       licenseKey: "test-license",
@@ -190,7 +190,7 @@ describe("Analyzer", () => {
     });
     analyzer.collector.process(makeFrame());
 
-    vi.advanceTimersByTime(10);
+    await vi.advanceTimersByTimeAsync(10);
 
     expect(sdk.analyzers[0]!.analyzeCalls).toBe(1);
     expect(logging.calls).toEqual([]);
@@ -235,7 +235,7 @@ describe("Analyzer", () => {
     expect(sdk.analyzers[0]!.analyzeCalls).toBe(0);
   });
 
-  it("records failed analyses without score measurements", () => {
+  it("records failed analyses without score measurements", async () => {
     const analyzer = new Analyzer({
       model: { getId: () => "analysis-test-model" } as never,
       licenseKey: "test-license",
@@ -244,7 +244,7 @@ describe("Analyzer", () => {
     sdk.analyzers[0]!.error = new Error("analysis failed");
     analyzer.collector.process(makeFrame());
 
-    vi.advanceTimersByTime(10);
+    await vi.advanceTimersByTimeAsync(10);
 
     expect(telemetry.measurements.analysis).toEqual([
       {
@@ -314,18 +314,18 @@ describe("Analyzer", () => {
     analyzer.close();
   });
 
-  it("analyzes only after audio is buffered", () => {
+  it("analyzes only after audio is buffered", async () => {
     const analyzer = new Analyzer({
       model: { getId: () => "analysis-test-model" } as never,
       licenseKey: "test-license",
       analysisInterval: 0.01,
     });
 
-    vi.advanceTimersByTime(50);
+    await vi.advanceTimersByTimeAsync(50);
     expect(sdk.analyzers[0]!.analyzeCalls).toBe(0);
 
     analyzer.collector.process(makeFrame());
-    vi.advanceTimersByTime(10);
+    await vi.advanceTimersByTimeAsync(10);
     expect(sdk.analyzers[0]!.analyzeCalls).toBe(1);
 
     analyzer.collector.onStreamInfoUpdated({
@@ -333,11 +333,11 @@ describe("Analyzer", () => {
       participantIdentity: "test-participant",
       publicationSid: "TR_test",
     });
-    vi.advanceTimersByTime(50);
+    await vi.advanceTimersByTimeAsync(50);
     expect(sdk.analyzers[0]!.analyzeCalls).toBe(1);
 
     analyzer.collector.process(makeFrame());
-    vi.advanceTimersByTime(10);
+    await vi.advanceTimersByTimeAsync(10);
     expect(sdk.analyzers[0]!.analyzeCalls).toBe(2);
     analyzer.close();
   });
@@ -396,7 +396,7 @@ describe("Analyzer", () => {
     analyzer.close();
   });
 
-  it("analysis failure is logged and retried", () => {
+  it("analysis failure is logged and retried", async () => {
     const analyzer = new Analyzer({
       model: { getId: () => "analysis-test-model" } as never,
       licenseKey: "test-license",
@@ -407,7 +407,7 @@ describe("Analyzer", () => {
     sdk.analyzers[0]!.error = new Error("analysis failed");
     analyzer.collector.process(makeFrame());
 
-    vi.advanceTimersByTime(20);
+    await vi.advanceTimersByTimeAsync(20);
     expect(sdk.analyzers[0]!.analyzeCalls).toBe(2);
     expect(logging.calls).toContainEqual(
       expect.objectContaining({
@@ -417,13 +417,13 @@ describe("Analyzer", () => {
     );
 
     sdk.analyzers[0]!.error = null;
-    vi.advanceTimersByTime(10);
+    await vi.advanceTimersByTimeAsync(10);
     expect(events).toHaveLength(1);
     expect(events[0]!.sequence).toBe(1);
     analyzer.close();
   });
 
-  it("throwing listener does not stop analysis", () => {
+  it("throwing listener does not stop analysis", async () => {
     const analyzer = new Analyzer({
       model: { getId: () => "analysis-test-model" } as never,
       licenseKey: "test-license",
@@ -436,7 +436,7 @@ describe("Analyzer", () => {
     });
     analyzer.collector.process(makeFrame());
 
-    vi.advanceTimersByTime(20);
+    await vi.advanceTimersByTimeAsync(20);
 
     expect(sequences).toEqual([1, 2]);
     expect(logging.calls).toContainEqual(
@@ -448,7 +448,7 @@ describe("Analyzer", () => {
     analyzer.close();
   });
 
-  it("metrics failure is logged and event still emitted", () => {
+  it("metrics failure is logged and event still emitted", async () => {
     const analyzer = new Analyzer({
       model: { getId: () => "analysis-test-model" } as never,
       licenseKey: "test-license",
@@ -459,7 +459,7 @@ describe("Analyzer", () => {
     telemetry.error = new Error("metrics failed");
     analyzer.collector.process(makeFrame());
 
-    vi.advanceTimersByTime(10);
+    await vi.advanceTimersByTimeAsync(10);
 
     expect(logging.calls).toContainEqual(
       expect.objectContaining({
