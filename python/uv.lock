@@ -33,7 +33,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aic-sdk", specifier = ">=3.3.0,<4" },
+    { name = "aic-sdk", specifier = "==3.3.0" },
     { name = "livekit-agents", specifier = ">=1.4.2,<2" },
     { name = "numpy", specifier = ">=2.0.2" },
     { name = "opentelemetry-api", specifier = ">=1.14,<2" },

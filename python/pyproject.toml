@@ -22,7 +22,7 @@ classifiers = [
   "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 dependencies = [
-  "aic-sdk>=3.3.0,<4",
+  "aic-sdk==3.3.0",
   "livekit-agents>=1.4.2,<2",
   "numpy>=2.0.2",
   "opentelemetry-api>=1.14,<2",
