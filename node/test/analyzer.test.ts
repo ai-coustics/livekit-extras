@@ -41,6 +41,7 @@ const sdk = vi.hoisted(() => {
     resetCalls = 0;
     terminateCalls = 0;
     error: Error | null = null;
+    resetError: Error | null = null;
 
     constructor() {
       analyzers.push(this);
@@ -70,6 +71,7 @@ const sdk = vi.hoisted(() => {
 
     reset(): void {
       this.resetCalls += 1;
+      if (this.resetError) throw this.resetError;
     }
 
     terminateSession(): void {
@@ -358,6 +360,33 @@ describe("Analyzer", () => {
     analyzer.collector.onStreamInfoUpdated(info);
 
     expect(sdk.analyzers[0]!.resetCalls).toBe(2);
+    analyzer.close();
+  });
+
+  it("failed reset is logged and does not escape stream info hooks", () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 60,
+    });
+    sdk.analyzers[0]!.resetError = new Error("reset failed");
+
+    expect(() =>
+      analyzer.collector.onStreamInfoUpdated({
+        roomName: "test-room",
+        participantIdentity: "test-participant",
+        publicationSid: "TR_test",
+      }),
+    ).not.toThrow();
+    expect(() => analyzer.collector.onStreamInfoCleared()).not.toThrow();
+
+    expect(sdk.analyzers[0]!.resetCalls).toBe(2);
+    expect(logging.calls).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "Collector: reset failed",
+      }),
+    );
     analyzer.close();
   });
 
