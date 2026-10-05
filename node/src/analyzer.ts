@@ -72,6 +72,7 @@ export type AnalyzerCallbacks = {
 /** Transparent LiveKit frame processor that collects audio for an Analyzer. */
 export class Collector extends FrameProcessor<AudioFrame> {
   private nativeAnalyzer: AicAnalyzer | null;
+  private readonly resetAnalyzer: () => void;
   private readonly closeAnalyzer: () => void;
   private streamFormat: [number, number, number] | null = null;
   private streamInfo: FrameProcessorStreamInfo | null = null;
@@ -79,9 +80,14 @@ export class Collector extends FrameProcessor<AudioFrame> {
   private collectingEnabled = true;
   private closed = false;
 
-  constructor(nativeAnalyzer: AicAnalyzer, closeAnalyzer: () => void) {
+  constructor(
+    nativeAnalyzer: AicAnalyzer,
+    resetAnalyzer: () => void,
+    closeAnalyzer: () => void,
+  ) {
     super();
     this.nativeAnalyzer = nativeAnalyzer;
+    this.resetAnalyzer = resetAnalyzer;
     this.closeAnalyzer = closeAnalyzer;
   }
 
@@ -151,7 +157,7 @@ export class Collector extends FrameProcessor<AudioFrame> {
   private reset(): void {
     if (this.closed) return;
     this.hasBufferedAudio = false;
-    this.nativeAnalyzer?.reset();
+    this.resetAnalyzer();
   }
 
   detach(): void {
@@ -174,6 +180,7 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
 
   private nativeAnalyzer: AicAnalyzer | null;
   private pendingAnalysis: Promise<void> | null = null;
+  private resetPending = false;
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly modelId: string;
   private readonly enableMetrics: boolean;
@@ -204,11 +211,18 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
 
     this.nativeAnalyzer = nativeAnalyzer;
     this.enableMetrics = options.enableMetrics ?? true;
-    this.collector = new Collector(nativeAnalyzer, () => this.close());
+    this.collector = new Collector(
+      nativeAnalyzer,
+      () => this.requestReset(),
+      () => this.close(),
+    );
     // An analysis can take longer than the interval. Do not queue more analyses behind it.
     this.timer = setInterval(() => {
       this.pendingAnalysis ??= this.analyze().finally(() => {
         this.pendingAnalysis = null;
+        if (!this.resetPending) return;
+        this.resetPending = false;
+        this.nativeAnalyzer?.reset();
       });
     }, analysisInterval * 1000);
     this.timer.unref?.();
@@ -256,6 +270,16 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
         error,
       );
     }
+  }
+
+  private requestReset(): void {
+    // The native reset waits for the lock that analyzeAsync() holds. A call now blocks the event
+    // loop.
+    if (this.pendingAnalysis) {
+      this.resetPending = true;
+      return;
+    }
+    this.nativeAnalyzer?.reset();
   }
 
   private recordMetrics(

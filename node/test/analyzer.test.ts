@@ -41,6 +41,7 @@ const sdk = vi.hoisted(() => {
     resetCalls = 0;
     terminateCalls = 0;
     error: Error | null = null;
+    hold: Promise<void> | null = null;
 
     constructor() {
       analyzers.push(this);
@@ -56,6 +57,7 @@ const sdk = vi.hoisted(() => {
 
     async analyzeAsync() {
       this.analyzeCalls += 1;
+      if (this.hold) await this.hold;
       if (this.error) throw this.error;
       return {
         riskScore: 0.1,
@@ -358,6 +360,34 @@ describe("Analyzer", () => {
     analyzer.collector.onStreamInfoUpdated(info);
 
     expect(sdk.analyzers[0]!.resetCalls).toBe(2);
+    analyzer.close();
+  });
+
+  it("defers stream boundary resets until in-flight analysis settles", async () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 0.01,
+    });
+    let release!: () => void;
+    sdk.analyzers[0]!.hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    analyzer.collector.process(makeFrame());
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sdk.analyzers[0]!.analyzeCalls).toBe(1);
+
+    analyzer.collector.onStreamInfoUpdated({
+      roomName: "test-room",
+      participantIdentity: "test-participant",
+      publicationSid: "TR_test",
+    });
+    analyzer.collector.onStreamInfoCleared();
+    expect(sdk.analyzers[0]!.resetCalls).toBe(0);
+
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sdk.analyzers[0]!.resetCalls).toBe(1);
     analyzer.close();
   });
 
