@@ -151,11 +151,7 @@ export class Collector extends FrameProcessor<AudioFrame> {
   private reset(): void {
     if (this.closed) return;
     this.hasBufferedAudio = false;
-    try {
-      this.nativeAnalyzer?.reset();
-    } catch (error) {
-      writeLog("error", "collector", "reset failed", this.streamInfo ?? {}, error);
-    }
+    this.nativeAnalyzer?.reset();
   }
 
   detach(): void {

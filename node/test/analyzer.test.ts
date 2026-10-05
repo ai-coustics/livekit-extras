@@ -363,33 +363,6 @@ describe("Analyzer", () => {
     analyzer.close();
   });
 
-  it("failed reset is logged and does not escape stream info hooks", () => {
-    const analyzer = new Analyzer({
-      model: { getId: () => "analysis-test-model" } as never,
-      licenseKey: "test-license",
-      analysisInterval: 60,
-    });
-    sdk.analyzers[0]!.resetError = new Error("reset failed");
-
-    expect(() =>
-      analyzer.collector.onStreamInfoUpdated({
-        roomName: "test-room",
-        participantIdentity: "test-participant",
-        publicationSid: "TR_test",
-      }),
-    ).not.toThrow();
-    expect(() => analyzer.collector.onStreamInfoCleared()).not.toThrow();
-
-    expect(sdk.analyzers[0]!.resetCalls).toBe(2);
-    expect(logging.calls).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        message: "Collector: reset failed",
-      }),
-    );
-    analyzer.close();
-  });
-
   it("reinitializes collector when frame format changes", () => {
     const analyzer = new Analyzer({
       model: { getId: () => "analysis-test-model" } as never,
