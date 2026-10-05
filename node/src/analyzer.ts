@@ -232,13 +232,14 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
     const analyzer = this.nativeAnalyzer;
     if (!analyzer || !this.collector.initialized) return;
 
+    // A stream change during the await defers the native reset, so the result belongs to this stream.
+    const streamInfo = this.collector.currentStreamInfo;
     const started = performance.now();
     try {
       const nativeResult = await analyzer.analyzeAsync();
       const elapsed = performance.now() - started;
       const result = Object.freeze({ ...nativeResult });
       this.sequence += 1;
-      const streamInfo = this.collector.currentStreamInfo;
       const event = Object.freeze({
         result,
         timestamp: Date.now(),
@@ -266,7 +267,7 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
         "error",
         "analyzer",
         "buffered audio analysis failed",
-        { modelName: this.modelId, ...(this.collector.currentStreamInfo ?? {}) },
+        { modelName: this.modelId, ...(streamInfo ?? {}) },
         error,
       );
     }
