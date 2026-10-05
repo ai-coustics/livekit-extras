@@ -1,6 +1,6 @@
 # ai-coustics LiveKit extras for Python
 
-Voice activity detection and Audio Insight for LiveKit Agents, backed by the public
+Voice activity detection and Audio Insight for LiveKit Agents, backed by the
 `aic-sdk` package.
 
 > [!IMPORTANT]

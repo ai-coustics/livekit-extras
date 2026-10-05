@@ -1,6 +1,6 @@
 # ai-coustics LiveKit extras for Node.js
 
-Voice activity detection and Audio Insight for LiveKit Agents, backed by the public
+Voice activity detection and Audio Insight for LiveKit Agents, backed by the
 `@ai-coustics/aic-sdk` package.
 
 > [!IMPORTANT]
