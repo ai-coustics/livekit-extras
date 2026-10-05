@@ -327,19 +327,7 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
       return;
     }
     // terminateSession() waits for the native lock, so a call during an analysis blocks the
-    // event loop.
-    void this.pendingAnalysis.then(() => {
-      try {
-        analyzer?.terminateSession();
-      } catch (error) {
-        writeLog(
-          "error",
-          "analyzer",
-          "session termination failed",
-          { modelName: this.modelId },
-          error,
-        );
-      }
-    });
+    // event loop. It fails only after dispose(), so the promise does not reject.
+    void this.pendingAnalysis.then(() => analyzer?.terminateSession());
   }
 }
