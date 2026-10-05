@@ -157,6 +157,8 @@ export class Collector extends FrameProcessor<AudioFrame> {
   private reset(): void {
     if (this.closed) return;
     this.hasBufferedAudio = false;
+    // The SDK reset fails only after dispose(). This wrapper never calls dispose(), so a handler
+    // is not necessary.
     this.resetAnalyzer();
   }
 

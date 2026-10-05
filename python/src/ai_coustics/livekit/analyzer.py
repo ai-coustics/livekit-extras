@@ -120,13 +120,9 @@ class Collector(rtc.FrameProcessor[rtc.AudioFrame]):
         if self._closed:
             return
         self._has_buffered_audio = False
-        try:
-            self._reset_analyzer()
-        except Exception:
-            logger.exception(
-                "Collector: reset failed",
-                extra=log_fields("collector", **self._stream_info),
-            )
+        # The SDK reset fails only during analyze_buffered(). _request_reset() delays the reset
+        # until that call returns, so a handler is not necessary.
+        self._reset_analyzer()
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
         collector = self._collector
