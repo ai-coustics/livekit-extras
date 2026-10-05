@@ -292,26 +292,18 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
   ): void {
     if (!this.enableMetrics) return;
 
-    try {
-      const attributes = { ...metricBaseAttributes, status };
-      analysisCount.add(1, attributes);
-      inferenceDuration.record(inferenceDurationMs / 1000, attributes);
-      if (result) {
-        for (const [scoreName, property] of resultFields) {
-          score.record(result[property], {
-            ...metricBaseAttributes,
-            "score.name": scoreName,
-          });
-        }
+    // The OpenTelemetry API specification does not let instrument calls throw. A handler is not
+    // necessary.
+    const attributes = { ...metricBaseAttributes, status };
+    analysisCount.add(1, attributes);
+    inferenceDuration.record(inferenceDurationMs / 1000, attributes);
+    if (result) {
+      for (const [scoreName, property] of resultFields) {
+        score.record(result[property], {
+          ...metricBaseAttributes,
+          "score.name": scoreName,
+        });
       }
-    } catch (error) {
-      writeLog(
-        "error",
-        "analyzer",
-        "metrics recording failed",
-        { modelName: this.modelId, status },
-        error,
-      );
     }
   }
 

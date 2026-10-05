@@ -263,25 +263,17 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
         if not self._enable_metrics:
             return
 
-        try:
-            attributes = {**_METRIC_BASE_ATTRIBUTES, "status": status}
-            _ANALYSIS_COUNT.add(1, attributes=attributes)
-            _INFERENCE_DURATION.record(inference_duration, attributes=attributes)
-            if result is not None:
-                for score_name in _RESULT_FIELDS:
-                    _SCORE.record(
-                        getattr(result, score_name),
-                        attributes={**_METRIC_BASE_ATTRIBUTES, "score.name": score_name},
-                    )
-        except Exception:
-            logger.exception(
-                "Analyzer: metrics recording failed",
-                extra=log_fields(
-                    "analyzer",
-                    model_name=self._model_id,
-                    status=status,
-                ),
-            )
+        # The OpenTelemetry API specification does not let instrument calls throw. A handler is
+        # not necessary.
+        attributes = {**_METRIC_BASE_ATTRIBUTES, "status": status}
+        _ANALYSIS_COUNT.add(1, attributes=attributes)
+        _INFERENCE_DURATION.record(inference_duration, attributes=attributes)
+        if result is not None:
+            for score_name in _RESULT_FIELDS:
+                _SCORE.record(
+                    getattr(result, score_name),
+                    attributes={**_METRIC_BASE_ATTRIBUTES, "score.name": score_name},
+                )
 
     async def _analysis_loop(self, native_analyzer: aic_sdk.Analyzer) -> None:
         try:

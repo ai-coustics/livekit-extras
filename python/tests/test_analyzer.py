@@ -90,16 +90,11 @@ def fake_sdk(
 class FakeInstrument:
     def __init__(self) -> None:
         self.measurements: list[tuple[float, dict[str, str]]] = []
-        self.error: Exception | None = None
 
     def add(self, value: float, *, attributes: dict[str, str]) -> None:
-        if self.error is not None:
-            raise self.error
         self.measurements.append((value, attributes))
 
     def record(self, value: float, *, attributes: dict[str, str]) -> None:
-        if self.error is not None:
-            raise self.error
         self.measurements.append((value, attributes))
 
 
@@ -532,30 +527,6 @@ async def test_throwing_listener_does_not_stop_analysis(
     assert any(
         record.message == "Analyzer: result event emission failed" for record in caplog.records
     )
-
-
-@pytest.mark.asyncio
-async def test_metrics_failure_is_logged_and_event_still_emitted(
-    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
-    caplog: pytest.LogCaptureFixture,
-    metric_instruments: dict[str, FakeInstrument],
-) -> None:
-    metric_instruments["analysis"].error = RuntimeError("metrics failed")
-    analyzer = Analyzer(
-        model=cast(aic_sdk.Model, FakeModel()),
-        license_key="test-license",
-        analysis_interval=0.01,
-    )
-    events: list[AnalysisEvent] = []
-    analyzer.on("analysis_result", events.append)
-    analyzer.collector._process(make_frame())
-
-    with caplog.at_level(logging.ERROR, logger="ai_coustics.livekit"):
-        await wait_until(lambda: bool(events))
-    await analyzer.aclose()
-
-    assert any(record.message == "Analyzer: metrics recording failed" for record in caplog.records)
-    assert events[0].sequence == 1
 
 
 @pytest.mark.asyncio

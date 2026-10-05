@@ -27,7 +27,7 @@ const telemetry = vi.hoisted(() => {
     duration: [] as Array<{ value: number; attributes?: Record<string, unknown> }>,
     score: [] as Array<{ value: number; attributes?: Record<string, unknown> }>,
   };
-  return { measurements, error: null as Error | null };
+  return { measurements };
 });
 
 const sdk = vi.hoisted(() => {
@@ -105,11 +105,9 @@ vi.mock("@opentelemetry/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@opentelemetry/api")>();
   const instrument = (name: keyof typeof telemetry.measurements) => ({
     add: (value: number, attributes?: Record<string, unknown>) => {
-      if (telemetry.error) throw telemetry.error;
       telemetry.measurements[name].push({ value, attributes });
     },
     record: (value: number, attributes?: Record<string, unknown>) => {
-      if (telemetry.error) throw telemetry.error;
       telemetry.measurements[name].push({ value, attributes });
     },
   });
@@ -145,7 +143,6 @@ describe("Analyzer", () => {
     telemetry.measurements.analysis.length = 0;
     telemetry.measurements.duration.length = 0;
     telemetry.measurements.score.length = 0;
-    telemetry.error = null;
   });
 
   afterEach(() => vi.useRealTimers());
@@ -475,30 +472,6 @@ describe("Analyzer", () => {
         message: "Analyzer: result event emission failed",
       }),
     );
-    analyzer.close();
-  });
-
-  it("metrics failure is logged and event still emitted", async () => {
-    const analyzer = new Analyzer({
-      model: { getId: () => "analysis-test-model" } as never,
-      licenseKey: "test-license",
-      analysisInterval: 0.01,
-    });
-    const events: AnalysisEvent[] = [];
-    analyzer.on("analysisResult", (event) => events.push(event));
-    telemetry.error = new Error("metrics failed");
-    analyzer.collector.process(makeFrame());
-
-    await vi.advanceTimersByTimeAsync(10);
-
-    expect(logging.calls).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        message: "Analyzer: metrics recording failed",
-      }),
-    );
-    expect(events).toHaveLength(1);
-    expect(events[0]!.sequence).toBe(1);
     analyzer.close();
   });
 
