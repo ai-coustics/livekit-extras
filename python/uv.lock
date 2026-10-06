@@ -12,7 +12,7 @@ resolution-markers = [
 
 [[package]]
 name = "ai-coustics-livekit-extras"
-version = "0.1.0"
+version = "0.25.0"
 source = { editable = "." }
 dependencies = [
     { name = "aic-sdk" },

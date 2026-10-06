@@ -1,6 +1,6 @@
 {
   "name": "@ai-coustics/livekit-extras",
-  "version": "0.1.0",
+  "version": "0.25.0",
   "description": "ai-coustics voice activity detection and audio analysis for LiveKit Agents",
   "license": "Apache-2.0",
   "author": "ai-coustics GmbH",
