@@ -1,0 +1,101 @@
+[
+  {
+    "name": "speech transitions",
+    "model": {"sample_rate": 16000, "block_size": 160},
+    "input_sample_rate": 16000,
+    "input_samples": 640,
+    "prediction_delay_samples": 0,
+    "vad_parameters": {"speech_hold_duration": 0.01},
+    "predictions": [[0.1, false], [0.9, true], [0.8, true], [0.1, false]],
+    "events": [
+      {"type": "inference_done", "samples_index": 160, "timestamp": 0.01, "speech_duration": 0.0, "silence_duration": 0.01, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.01, "audio_start": 0, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 320, "timestamp": 0.02, "speech_duration": 0.0, "silence_duration": 0.02, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.01, "raw_accumulated_silence": 0.0, "audio_start": 160, "audio_samples": 160},
+      {"type": "start_of_speech", "samples_index": 320, "timestamp": 0.02, "speech_duration": 0.01, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.01, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 320},
+      {"type": "inference_done", "samples_index": 480, "timestamp": 0.03, "speech_duration": 0.02, "silence_duration": 0.0, "probability": 0.8, "speaking": true, "raw_accumulated_speech": 0.02, "raw_accumulated_silence": 0.0, "audio_start": 320, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 640, "timestamp": 0.04, "speech_duration": 0.03, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.01, "audio_start": 480, "audio_samples": 160},
+      {"type": "end_of_speech", "samples_index": 640, "timestamp": 0.04, "speech_duration": 0.02, "silence_duration": 0.01, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.01, "audio_start": 0, "audio_samples": 640}
+    ]
+  },
+  {
+    "name": "default silence floor",
+    "model": {"sample_rate": 16000, "block_size": 160},
+    "input_sample_rate": 16000,
+    "input_samples": 4160,
+    "prediction_delay_samples": 0,
+    "predictions": [[0.9, true], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false]],
+    "events": [
+      {"type": "inference_done", "samples_index": 160, "timestamp": 0.01, "speech_duration": 0.0, "silence_duration": 0.01, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.01, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 160},
+      {"type": "start_of_speech", "samples_index": 160, "timestamp": 0.01, "speech_duration": 0.01, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.01, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 320, "timestamp": 0.02, "speech_duration": 0.02, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.01, "audio_start": 160, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 480, "timestamp": 0.03, "speech_duration": 0.03, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.02, "audio_start": 320, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 640, "timestamp": 0.04, "speech_duration": 0.04, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.03, "audio_start": 480, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 800, "timestamp": 0.05, "speech_duration": 0.05, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.04, "audio_start": 640, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 960, "timestamp": 0.06, "speech_duration": 0.06, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.05, "audio_start": 800, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 1120, "timestamp": 0.07, "speech_duration": 0.07, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.06, "audio_start": 960, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 1280, "timestamp": 0.08, "speech_duration": 0.08, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.07, "audio_start": 1120, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 1440, "timestamp": 0.09, "speech_duration": 0.09, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.08, "audio_start": 1280, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 1600, "timestamp": 0.1, "speech_duration": 0.1, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.09, "audio_start": 1440, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 1760, "timestamp": 0.11, "speech_duration": 0.11, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.1, "audio_start": 1600, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 1920, "timestamp": 0.12, "speech_duration": 0.12, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.11, "audio_start": 1760, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 2080, "timestamp": 0.13, "speech_duration": 0.13, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.12, "audio_start": 1920, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 2240, "timestamp": 0.14, "speech_duration": 0.14, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.13, "audio_start": 2080, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 2400, "timestamp": 0.15, "speech_duration": 0.15, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.14, "audio_start": 2240, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 2560, "timestamp": 0.16, "speech_duration": 0.16, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.15, "audio_start": 2400, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 2720, "timestamp": 0.17, "speech_duration": 0.17, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.16, "audio_start": 2560, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 2880, "timestamp": 0.18, "speech_duration": 0.18, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.17, "audio_start": 2720, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 3040, "timestamp": 0.19, "speech_duration": 0.19, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.18, "audio_start": 2880, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 3200, "timestamp": 0.2, "speech_duration": 0.2, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.19, "audio_start": 3040, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 3360, "timestamp": 0.21, "speech_duration": 0.21, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.2, "audio_start": 3200, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 3520, "timestamp": 0.22, "speech_duration": 0.22, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.21, "audio_start": 3360, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 3680, "timestamp": 0.23, "speech_duration": 0.23, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.22, "audio_start": 3520, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 3840, "timestamp": 0.24, "speech_duration": 0.24, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.23, "audio_start": 3680, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 4000, "timestamp": 0.25, "speech_duration": 0.25, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.24, "audio_start": 3840, "audio_samples": 160},
+      {"type": "inference_done", "samples_index": 4160, "timestamp": 0.26, "speech_duration": 0.26, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.25, "audio_start": 4000, "audio_samples": 160},
+      {"type": "end_of_speech", "samples_index": 4160, "timestamp": 0.26, "speech_duration": 0.01, "silence_duration": 0.25, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.25, "audio_start": 0, "audio_samples": 4160}
+    ]
+  },
+  {
+    "name": "prediction delay",
+    "model": {"sample_rate": 16000, "block_size": 160},
+    "input_sample_rate": 48000,
+    "input_samples": 3840,
+    "prediction_delay_samples": 960,
+    "vad_parameters": {"speech_hold_duration": 0.03, "minimum_speech_duration": 0.02},
+    "prefix_padding_duration": 0.0,
+    "predictions": [[0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.9, false], [0.9, true], [0.1, false]],
+    "events": [
+      {"type": "inference_done", "samples_index": 480, "timestamp": 0.01, "speech_duration": 0.0, "silence_duration": 0.01, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.03, "audio_start": 0, "audio_samples": 480},
+      {"type": "inference_done", "samples_index": 960, "timestamp": 0.02, "speech_duration": 0.0, "silence_duration": 0.02, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.04, "audio_start": 480, "audio_samples": 480},
+      {"type": "inference_done", "samples_index": 1440, "timestamp": 0.03, "speech_duration": 0.0, "silence_duration": 0.03, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.05, "audio_start": 960, "audio_samples": 480},
+      {"type": "inference_done", "samples_index": 1920, "timestamp": 0.04, "speech_duration": 0.0, "silence_duration": 0.04, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.06, "audio_start": 1440, "audio_samples": 480},
+      {"type": "inference_done", "samples_index": 2400, "timestamp": 0.05, "speech_duration": 0.0, "silence_duration": 0.05, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.07, "audio_start": 1920, "audio_samples": 480},
+      {"type": "inference_done", "samples_index": 2880, "timestamp": 0.06, "speech_duration": 0.0, "silence_duration": 0.06, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.03, "raw_accumulated_silence": 0.0, "audio_start": 2400, "audio_samples": 480},
+      {"type": "inference_done", "samples_index": 3360, "timestamp": 0.07, "speech_duration": 0.0, "silence_duration": 0.07, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.04, "raw_accumulated_silence": 0.0, "audio_start": 2880, "audio_samples": 480},
+      {"type": "start_of_speech", "samples_index": 3360, "timestamp": 0.07, "speech_duration": 0.04, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.04, "raw_accumulated_silence": 0.0, "audio_start": 1440, "audio_samples": 1920},
+      {"type": "inference_done", "samples_index": 3840, "timestamp": 0.08, "speech_duration": 0.05, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.03, "audio_start": 3360, "audio_samples": 480},
+      {"type": "end_of_speech", "samples_index": 3840, "timestamp": 0.08, "speech_duration": 0.02, "silence_duration": 0.03, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.03, "audio_start": 1440, "audio_samples": 2400}
+    ]
+  },
+  {
+    "name": "speech cap and rolling prefix",
+    "model": {"sample_rate": 10, "block_size": 4},
+    "input_sample_rate": 10,
+    "input_samples": 20,
+    "prediction_delay_samples": 0,
+    "vad_parameters": {"minimum_speech_duration": 0.0},
+    "prefix_padding_duration": 0.2,
+    "max_buffered_speech": 0.5,
+    "predictions": [[0.9, true], [0.1, false], [0.1, false], [0.9, true], [0.1, false]],
+    "events": [
+      {"type": "inference_done", "samples_index": 4, "timestamp": 0.4, "speech_duration": 0.0, "silence_duration": 0.4, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.4, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 4},
+      {"type": "start_of_speech", "samples_index": 4, "timestamp": 0.4, "speech_duration": 0.4, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.4, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 4},
+      {"type": "inference_done", "samples_index": 8, "timestamp": 0.8, "speech_duration": 0.8, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.4, "audio_start": 4, "audio_samples": 4},
+      {"type": "end_of_speech", "samples_index": 8, "timestamp": 0.8, "speech_duration": 0.4, "silence_duration": 0.4, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.4, "audio_start": 0, "audio_samples": 7},
+      {"type": "inference_done", "samples_index": 12, "timestamp": 1.2, "speech_duration": 0.0, "silence_duration": 0.8, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.8, "audio_start": 8, "audio_samples": 4},
+      {"type": "inference_done", "samples_index": 16, "timestamp": 1.6, "speech_duration": 0.0, "silence_duration": 1.2, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.4, "raw_accumulated_silence": 0.0, "audio_start": 12, "audio_samples": 4},
+      {"type": "start_of_speech", "samples_index": 16, "timestamp": 1.6, "speech_duration": 0.4, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.4, "raw_accumulated_silence": 0.0, "audio_start": 8, "audio_samples": 7},
+      {"type": "inference_done", "samples_index": 20, "timestamp": 2.0, "speech_duration": 0.8, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.4, "audio_start": 16, "audio_samples": 4},
+      {"type": "end_of_speech", "samples_index": 20, "timestamp": 2.0, "speech_duration": 0.4, "silence_duration": 0.4, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.4, "audio_start": 8, "audio_samples": 7}
+    ]
+  }
+]

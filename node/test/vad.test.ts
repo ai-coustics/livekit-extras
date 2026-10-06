@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   VAD as LiveKitVAD,
   VADEventType,
@@ -143,6 +144,35 @@ import { FrameProcessorChain, VAD, VADParameters } from "../src/index.js";
 
 initializeLogger({ pretty: false, level: "silent" });
 
+interface Scenario {
+  name: string;
+  model: { sample_rate: number; block_size: number };
+  input_sample_rate: number;
+  input_samples: number;
+  prediction_delay_samples: number;
+  vad_parameters?: Record<string, number>;
+  prefix_padding_duration?: number;
+  max_buffered_speech?: number;
+  predictions: Array<[number, boolean]>;
+  events: Array<Record<string, unknown>>;
+}
+
+const scenarios: Scenario[] = JSON.parse(
+  readFileSync(new URL("../../testdata/vad_scenarios.json", import.meta.url), "utf8"),
+);
+
+const camelCase = (key: string) => key.replace(/_(\w)/g, (_, letter: string) => letter.toUpperCase());
+const milliseconds = (seconds?: number) => (seconds === undefined ? undefined : seconds * 1000);
+
+function approx(expected: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(expected).map(([key, value]) => [
+      key,
+      typeof value === "number" ? expect.closeTo(value, 9) : value,
+    ]),
+  );
+}
+
 function makeFrame(
   data: Int16Array,
   sampleRate = 16_000,
@@ -266,123 +296,47 @@ describe("VAD", () => {
     warning.mockRestore();
   });
 
-  it("emits inference events and contiguous speech audio", async () => {
+  it.each(scenarios)("replays shared scenario: $name", async (scenario) => {
     const vad = new VAD({
-      model: new sdk.FakeModel(),
+      model: new sdk.FakeModel(scenario.model.sample_rate, scenario.model.block_size),
       licenseKey: "test-license",
-      vadParameters: { speechHoldDuration: 0.01 },
+      vadParameters: Object.fromEntries(
+        Object.entries(scenario.vad_parameters ?? {}).map(([key, value]) => [
+          camelCase(key),
+          value,
+        ]),
+      ),
+      prefixPaddingDuration: milliseconds(scenario.prefix_padding_duration),
+      maxBufferedSpeech: milliseconds(scenario.max_buffered_speech),
     });
     const stream = vad.stream();
     const native = sdk.instances[0]!;
-    native.predictions.push(
-      [0.1, false],
-      [0.9, true],
-      [0.8, true],
-      [0.1, false],
-    );
+    native.context.predictionDelay = scenario.prediction_delay_samples;
+    native.predictions.push(...scenario.predictions);
 
-    pushProcessed(
-      vad,
-      stream,
-      makeFrame(Int16Array.from({ length: 640 }, (_, index) => index)),
-    );
+    const ramp = Int16Array.from({ length: scenario.input_samples }, (_, index) => index);
+    pushProcessed(vad, stream, makeFrame(ramp, scenario.input_sample_rate));
     const events = await collectEvents(stream);
 
-    expect(events.map((event) => event.type)).toEqual([
-      VADEventType.INFERENCE_DONE,
-      VADEventType.INFERENCE_DONE,
-      VADEventType.START_OF_SPEECH,
-      VADEventType.INFERENCE_DONE,
-      VADEventType.INFERENCE_DONE,
-      VADEventType.END_OF_SPEECH,
-    ]);
-    const inferenceEvents = events.filter(
-      (event) => event.type === VADEventType.INFERENCE_DONE,
-    );
-    expect(inferenceEvents.map((event) => event.probability)).toEqual([
-      0.1, 0.9, 0.8, 0.1,
-    ]);
-    expect(inferenceEvents.map((event) => event.samplesIndex)).toEqual([
-      160, 320, 480, 640,
-    ]);
-    expect(events[2]!.frames[0]!.data).toEqual(
-      Int16Array.from({ length: 320 }, (_, index) => index),
-    );
-    expect(events.at(-1)!.frames[0]!.data).toEqual(
-      Int16Array.from({ length: 640 }, (_, index) => index),
-    );
-    expect(native.terminateCalls).toBe(0);
-  });
-
-  it("enforces the default silence floor after short speech", async () => {
-    const vad = new VAD({
-      model: new sdk.FakeModel(),
-      licenseKey: "test-license",
-    });
-    const stream = vad.stream();
-    const native = sdk.instances[0]!;
-    native.predictions.push([0.9, true], ...Array(25).fill([0.1, false]));
-
-    pushProcessed(vad, stream, makeFrame(new Int16Array(26 * 160)));
-    const events = await collectEvents(stream);
-
-    const inferenceEvents = events.filter(
-      (event) => event.type === VADEventType.INFERENCE_DONE,
-    );
-    const endEvents = events.filter(
-      (event) => event.type === VADEventType.END_OF_SPEECH,
-    );
-    expect(endEvents).toHaveLength(1);
-    expect(inferenceEvents.slice(1).every((event) => event.speaking)).toBe(true);
-    expect(inferenceEvents.at(-1)!.rawAccumulatedSilence).toBeCloseTo(250);
-    expect(endEvents[0]!.silenceDuration).toBeCloseTo(250);
-  });
-
-  it("uses the input sample rate and accounts for the SDK prediction delay", async () => {
-    const vad = new VAD({
-      model: new sdk.FakeModel(),
-      licenseKey: "test-license",
-      vadParameters: {
-        speechHoldDuration: 0.03,
-        minimumSpeechDuration: 0.02,
-      },
-      prefixPaddingDuration: 0,
-    });
-    const stream = vad.stream();
-    const native = sdk.instances[0]!;
-    native.context.predictionDelay = 960;
-    native.predictions.push(
-      [0.1, false],
-      [0.1, false],
-      [0.1, false],
-      [0.1, false],
-      [0.1, false],
-      [0.9, false],
-      [0.9, true],
-      [0.1, false],
-    );
-    const samples = new Int16Array(8 * 480);
-    for (let block = 0; block < 8; block += 1) {
-      samples.fill(block + 1, block * 480, (block + 1) * 480);
+    expect(events).toHaveLength(scenario.events.length);
+    for (const [index, event] of events.entries()) {
+      expect(event.frames).toHaveLength(1);
+      const audio = event.frames[0]!.data;
+      expect(audio).toEqual(ramp.slice(audio[0], audio[0]! + audio.length));
+      expect({
+        type: VADEventType[event.type].toLowerCase(),
+        samples_index: event.samplesIndex,
+        timestamp: event.timestamp / 1000,
+        speech_duration: event.speechDuration / 1000,
+        silence_duration: event.silenceDuration / 1000,
+        probability: event.probability,
+        speaking: event.speaking,
+        raw_accumulated_speech: event.rawAccumulatedSpeech / 1000,
+        raw_accumulated_silence: event.rawAccumulatedSilence / 1000,
+        audio_start: audio[0],
+        audio_samples: audio.length,
+      }).toEqual(approx(scenario.events[index]!));
     }
-
-    pushProcessed(vad, stream, makeFrame(samples, 48_000));
-    const events = await collectEvents(stream);
-    const start = events.find(
-      (event) => event.type === VADEventType.START_OF_SPEECH,
-    )!;
-    const end = events.find((event) => event.type === VADEventType.END_OF_SPEECH)!;
-
-    expect(native.initializations).toEqual([[48_000, 480, false]]);
-    expect(native.blocks).toHaveLength(8);
-    expect(start.timestamp).toBeCloseTo(70);
-    expect(start.speechDuration).toBeCloseTo(40);
-    expect(start.rawAccumulatedSpeech).toBeCloseTo(40);
-    expect(Array.from(start.frames[0]!.data).filter((_, index) => index % 480 === 0)).toEqual([
-      4, 5, 6, 7,
-    ]);
-    expect(end.timestamp).toBeCloseTo(80);
-    expect(end.silenceDuration).toBeCloseTo(30);
   });
 
   it("downmixes stereo and reblocks without resampling", async () => {
@@ -404,6 +358,25 @@ describe("VAD", () => {
     expect(native.blocks).toHaveLength(1);
     expect(native.blocks[0]).toEqual([2000, 3000, 4000, 5000].map((sample) => sample / 32768));
     expect(events[0]!.frames[0]!.channels).toBe(1);
+  });
+
+  it("uses the input sample rate without plugin resampling", async () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    const stream = vad.stream();
+    const native = sdk.instances[0]!;
+    native.predictions.push([0, false]);
+    const input = Int16Array.from({ length: 480 }, (_, index) => index);
+
+    pushProcessed(vad, stream, makeFrame(input, 48_000));
+    const events = await collectEvents(stream);
+
+    expect(native.initializations).toEqual([[48_000, 480, false]]);
+    expect(native.blocks).toEqual([Array.from(input, (sample) => sample / 32768)]);
+    expect(events[0]!.frames[0]!.sampleRate).toBe(48_000);
+    expect(events[0]!.frames[0]!.data).toEqual(input);
   });
 
   it("reinitializes only when the input sample rate changes", () => {
@@ -428,43 +401,6 @@ describe("VAD", () => {
       [48_000, 12, false],
     ]);
     expect(native.blocks.map((block) => block.length)).toEqual([4, 4, 4, 12, 12]);
-  });
-
-  it("caps contiguous speech and keeps the rolling prefix current", async () => {
-    const vad = new VAD({
-      model: new sdk.FakeModel(10, 4),
-      licenseKey: "test-license",
-      vadParameters: { minimumSpeechDuration: 0 },
-      prefixPaddingDuration: 200,
-      maxBufferedSpeech: 500,
-    });
-    const stream = vad.stream();
-    const native = sdk.instances[0]!;
-    native.predictions.push(
-      [0.9, true],
-      [0.1, false],
-      [0.1, false],
-      [0.9, true],
-      [0.1, false],
-    );
-
-    pushProcessed(
-      vad,
-      stream,
-      makeFrame(Int16Array.from({ length: 20 }, (_, index) => index + 1), 10),
-    );
-    const events = await collectEvents(stream);
-    const starts = events.filter(
-      (event) => event.type === VADEventType.START_OF_SPEECH,
-    );
-    const ends = events.filter((event) => event.type === VADEventType.END_OF_SPEECH);
-
-    expect(starts).toHaveLength(2);
-    expect(ends).toHaveLength(2);
-    expect(Array.from(ends[0]!.frames[0]!.data)).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    expect(Array.from(starts[1]!.frames[0]!.data)).toEqual([
-      9, 10, 11, 12, 13, 14, 15,
-    ]);
   });
 
   it("resets stream state on flush without repeating shared inference", async () => {

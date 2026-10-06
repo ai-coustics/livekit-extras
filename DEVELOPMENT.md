@@ -248,7 +248,9 @@ default. Override their IDs or cache directory with `AIC_INTEGRATION_VAD_MODEL_I
 
 The test suite has three layers:
 
-1. Unit tests mock the native SDK boundary and require no license or network access.
+1. Unit tests mock the native SDK boundary and require no license or network access. Both
+   runtimes replay the VAD event scenarios in `testdata/vad_scenarios.json`, so a change to VAD
+   event behavior updates that one file.
 2. Integration tests use downloaded models and the real SDK VAD and Analyzer directly.
 3. End-to-end tests send microphone audio through a real LiveKit room and an `AgentSession`
    configured with the real VAD integration.

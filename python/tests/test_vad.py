@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from collections import deque
 from collections.abc import Callable
-from typing import cast
+from pathlib import Path
+from typing import Any, cast
 
 import aic_sdk
 import numpy as np
@@ -12,6 +14,9 @@ from livekit import agents, rtc
 from ai_coustics.livekit import VAD, FrameProcessorChain, VADParameters
 
 native_calls: list[tuple[str, int | None]] = []
+SCENARIOS: list[dict[str, Any]] = json.loads(
+    (Path(__file__).resolve().parents[2] / "testdata" / "vad_scenarios.json").read_text()
+)
 
 
 class FakeModel:
@@ -253,166 +258,43 @@ def test_wraps_native_vad_construction_errors(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_emits_inference_and_speech_transition_events() -> None:
-    vad = create_vad(vad_parameters=VADParameters(speech_hold_duration=0.01))
-    stream = vad.stream()
-    native = FakeVad.instances[0]
-    native.predictions.extend(
-        [
-            (0.1, False),
-            (0.9, True),
-            (0.8, True),
-            (0.1, False),
-        ]
-    )
-
-    push_processed(vad, stream, make_frame(np.arange(640, dtype=np.int16)))
-    events = await collect_events(stream)
-
-    assert [event.type for event in events] == [
-        agents.vad.VADEventType.INFERENCE_DONE,
-        agents.vad.VADEventType.INFERENCE_DONE,
-        agents.vad.VADEventType.START_OF_SPEECH,
-        agents.vad.VADEventType.INFERENCE_DONE,
-        agents.vad.VADEventType.INFERENCE_DONE,
-        agents.vad.VADEventType.END_OF_SPEECH,
-    ]
-    inference_events = [
-        event for event in events if event.type == agents.vad.VADEventType.INFERENCE_DONE
-    ]
-    assert [event.probability for event in inference_events] == [0.1, 0.9, 0.8, 0.1]
-    assert [event.samples_index for event in inference_events] == [160, 320, 480, 640]
-    assert inference_events[1].raw_accumulated_speech == pytest.approx(0.01)
-    assert inference_events[-1].raw_accumulated_silence == pytest.approx(0.01)
-
-    start = events[2]
-    end = events[-1]
-    assert start.speaking is True
-    assert end.speaking is False
-    assert len(start.frames) == 1
-    assert len(end.frames) == 1
-    assert np.array_equal(
-        np.frombuffer(start.frames[0].data, dtype=np.int16),
-        np.arange(320, dtype=np.int16),
-    )
-    assert end.frames[0].samples_per_channel == 640
-    assert np.array_equal(
-        np.frombuffer(end.frames[0].data, dtype=np.int16),
-        np.arange(640, dtype=np.int16),
-    )
-    assert native.terminate_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_enforces_default_silence_floor_after_short_speech() -> None:
-    vad = create_vad()
-    stream = vad.stream()
-    native = FakeVad.instances[0]
-    native.predictions.extend([(0.9, True), *[(0.1, False)] * 25])
-
-    push_processed(vad, stream, make_frame(np.arange(26 * 160, dtype=np.int16)))
-    events = await collect_events(stream)
-
-    inference_events = [
-        event for event in events if event.type == agents.vad.VADEventType.INFERENCE_DONE
-    ]
-    end_events = [event for event in events if event.type == agents.vad.VADEventType.END_OF_SPEECH]
-    assert len(end_events) == 1
-    assert all(event.speaking for event in inference_events[1:])
-    assert inference_events[-1].raw_accumulated_silence == pytest.approx(0.25)
-    assert end_events[0].silence_duration == pytest.approx(0.25)
-
-
-@pytest.mark.asyncio
-async def test_aligns_events_and_candidate_audio_with_sdk_prediction_delay() -> None:
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=[scenario["name"] for scenario in SCENARIOS])
+async def test_replays_shared_vad_scenario(scenario: dict[str, Any]) -> None:
     vad = create_vad(
-        vad_parameters=VADParameters(
-            speech_hold_duration=0.03,
-            minimum_speech_duration=0.02,
-        ),
-        prefix_padding_duration=0.0,
+        model=FakeModel(**scenario["model"]),
+        vad_parameters=VADParameters(**scenario.get("vad_parameters", {})),
+        **{
+            option: scenario[option]
+            for option in ("prefix_padding_duration", "max_buffered_speech")
+            if option in scenario
+        },
     )
     stream = vad.stream()
     native = FakeVad.instances[0]
-    native.context.prediction_delay_samples = 320
-    native.predictions.extend(
-        [
-            (0.1, False),
-            (0.1, False),
-            (0.1, False),
-            (0.1, False),
-            (0.1, False),
-            (0.9, False),
-            (0.9, True),
-            (0.1, False),
-        ]
-    )
-    samples = np.concatenate([np.full(160, index, dtype=np.int16) for index in range(1, 9)])
+    native.context.prediction_delay_samples = scenario["prediction_delay_samples"]
+    native.predictions.extend(tuple(prediction) for prediction in scenario["predictions"])
 
-    push_processed(vad, stream, make_frame(samples))
+    ramp = np.arange(scenario["input_samples"], dtype=np.int16)
+    push_processed(vad, stream, make_frame(ramp, sample_rate=scenario["input_sample_rate"]))
     events = await collect_events(stream)
 
-    start = next(event for event in events if event.type == agents.vad.VADEventType.START_OF_SPEECH)
-    end = next(event for event in events if event.type == agents.vad.VADEventType.END_OF_SPEECH)
-    assert start.timestamp == pytest.approx(0.07)
-    assert start.speech_duration == pytest.approx(0.04)
-    assert start.raw_accumulated_speech == pytest.approx(0.04)
-    assert start.timestamp - start.speech_duration == pytest.approx(0.03)
-    assert len(start.frames) == 1
-    start_samples = np.frombuffer(start.frames[0].data, dtype=np.int16)
-    assert start_samples[::160].tolist() == [4, 5, 6, 7]
-    assert end.timestamp == pytest.approx(0.08)
-    assert end.silence_duration == pytest.approx(0.03)
-    assert end.speech_duration == pytest.approx(0.02)
-    assert end.raw_accumulated_silence == pytest.approx(0.03)
-
-
-@pytest.mark.asyncio
-async def test_caps_contiguous_speech_audio_and_keeps_rolling_prefix_current() -> None:
-    vad = create_vad(
-        model=FakeModel(sample_rate=10, block_size=4),
-        vad_parameters=VADParameters(minimum_speech_duration=0.0),
-        prefix_padding_duration=0.2,
-        max_buffered_speech=0.5,
-    )
-    stream = vad.stream()
-    native = FakeVad.instances[0]
-    native.predictions.extend(
-        [
-            (0.9, True),
-            (0.1, False),
-            (0.1, False),
-            (0.9, True),
-            (0.1, False),
-        ]
-    )
-
-    push_processed(vad, stream, make_frame(np.arange(1, 21, dtype=np.int16), sample_rate=10))
-    events = await collect_events(stream)
-
-    starts = [event for event in events if event.type == agents.vad.VADEventType.START_OF_SPEECH]
-    ends = [event for event in events if event.type == agents.vad.VADEventType.END_OF_SPEECH]
-    assert len(starts) == 2
-    assert len(ends) == 2
-    assert all(len(event.frames) == 1 for event in [*starts, *ends])
-    assert np.frombuffer(ends[0].frames[0].data, dtype=np.int16).tolist() == [
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-    ]
-    assert np.frombuffer(starts[1].frames[0].data, dtype=np.int16).tolist() == [
-        9,
-        10,
-        11,
-        12,
-        13,
-        14,
-        15,
-    ]
+    for event, expected in zip(events, scenario["events"], strict=True):
+        (frame,) = event.frames
+        audio = np.frombuffer(frame.data, dtype=np.int16)
+        assert np.array_equal(audio, ramp[audio[0] : audio[0] + audio.size])
+        assert {
+            "type": event.type.value,
+            "samples_index": event.samples_index,
+            "timestamp": event.timestamp,
+            "speech_duration": event.speech_duration,
+            "silence_duration": event.silence_duration,
+            "probability": event.probability,
+            "speaking": event.speaking,
+            "raw_accumulated_speech": event.raw_accumulated_speech,
+            "raw_accumulated_silence": event.raw_accumulated_silence,
+            "audio_start": audio[0],
+            "audio_samples": audio.size,
+        } == pytest.approx(expected)
 
 
 @pytest.mark.asyncio
