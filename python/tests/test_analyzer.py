@@ -647,4 +647,4 @@ async def test_aclose_waits_for_in_flight_analysis(
     await asyncio.wait_for(close_task, timeout=1.0)
     assert native_analyzer.terminate_calls == 1
     assert len(events) == 1
-    assert events[0].room_name is None
+    assert events[0].room_name == "test-room"

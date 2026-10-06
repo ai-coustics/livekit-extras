@@ -72,6 +72,7 @@ export type AnalyzerCallbacks = {
 /** Transparent LiveKit frame processor that collects audio for an Analyzer. */
 export class Collector extends FrameProcessor<AudioFrame> {
   private nativeAnalyzer: AicAnalyzer | null;
+  private readonly resetAnalyzer: () => void;
   private readonly closeAnalyzer: () => void;
   private streamFormat: [number, number, number] | null = null;
   private streamInfo: FrameProcessorStreamInfo | null = null;
@@ -79,9 +80,14 @@ export class Collector extends FrameProcessor<AudioFrame> {
   private collectingEnabled = true;
   private closed = false;
 
-  constructor(nativeAnalyzer: AicAnalyzer, closeAnalyzer: () => void) {
+  constructor(
+    nativeAnalyzer: AicAnalyzer,
+    resetAnalyzer: () => void,
+    closeAnalyzer: () => void,
+  ) {
     super();
     this.nativeAnalyzer = nativeAnalyzer;
+    this.resetAnalyzer = resetAnalyzer;
     this.closeAnalyzer = closeAnalyzer;
   }
 
@@ -151,7 +157,7 @@ export class Collector extends FrameProcessor<AudioFrame> {
   private reset(): void {
     if (this.closed) return;
     this.hasBufferedAudio = false;
-    this.nativeAnalyzer?.reset();
+    this.resetAnalyzer();
   }
 
   detach(): void {
@@ -173,6 +179,8 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
   readonly collector: Collector;
 
   private nativeAnalyzer: AicAnalyzer | null;
+  private pendingAnalysis: Promise<void> | null = null;
+  private resetPending = false;
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly modelId: string;
   private readonly enableMetrics: boolean;
@@ -203,22 +211,35 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
 
     this.nativeAnalyzer = nativeAnalyzer;
     this.enableMetrics = options.enableMetrics ?? true;
-    this.collector = new Collector(nativeAnalyzer, () => this.close());
-    this.timer = setInterval(() => this.analyze(), analysisInterval * 1000);
+    this.collector = new Collector(
+      nativeAnalyzer,
+      () => this.requestReset(),
+      () => this.close(),
+    );
+    // An analysis can take longer than the interval. Do not queue more analyses behind it.
+    this.timer = setInterval(() => {
+      this.pendingAnalysis ??= this.analyze().finally(() => {
+        this.pendingAnalysis = null;
+        if (!this.resetPending) return;
+        this.resetPending = false;
+        this.nativeAnalyzer?.reset();
+      });
+    }, analysisInterval * 1000);
     this.timer.unref?.();
   }
 
-  private analyze(): void {
+  private async analyze(): Promise<void> {
     const analyzer = this.nativeAnalyzer;
     if (!analyzer || !this.collector.initialized) return;
 
+    // A stream change during the await defers the native reset, so the result belongs to this stream.
+    const streamInfo = this.collector.currentStreamInfo;
     const started = performance.now();
     try {
-      const nativeResult = analyzer.analyze();
+      const nativeResult = await analyzer.analyzeAsync();
       const elapsed = performance.now() - started;
       const result = Object.freeze({ ...nativeResult });
       this.sequence += 1;
-      const streamInfo = this.collector.currentStreamInfo;
       const event = Object.freeze({
         result,
         timestamp: Date.now(),
@@ -246,10 +267,20 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
         "error",
         "analyzer",
         "buffered audio analysis failed",
-        { modelName: this.modelId, ...(this.collector.currentStreamInfo ?? {}) },
+        { modelName: this.modelId, ...(streamInfo ?? {}) },
         error,
       );
     }
+  }
+
+  private requestReset(): void {
+    // The native reset waits for the lock that analyzeAsync() holds. A call now blocks the event
+    // loop.
+    if (this.pendingAnalysis) {
+      this.resetPending = true;
+      return;
+    }
+    this.nativeAnalyzer?.reset();
   }
 
   private recordMetrics(
@@ -289,6 +320,24 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
     this.collector.detach();
     const analyzer = this.nativeAnalyzer;
     this.nativeAnalyzer = null;
-    analyzer?.terminateSession();
+    if (!this.pendingAnalysis) {
+      analyzer?.terminateSession();
+      return;
+    }
+    // terminateSession() waits for the native lock, so a call during an analysis blocks the
+    // event loop.
+    void this.pendingAnalysis.then(() => {
+      try {
+        analyzer?.terminateSession();
+      } catch (error) {
+        writeLog(
+          "error",
+          "analyzer",
+          "session termination failed",
+          { modelName: this.modelId },
+          error,
+        );
+      }
+    });
   }
 }
