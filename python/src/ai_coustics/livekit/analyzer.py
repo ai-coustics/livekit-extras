@@ -298,8 +298,8 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
                     pass
                 if not self.collector.initialized:
                     continue
-                self._analysis_in_flight = True
                 try:
+                    self._analysis_in_flight = True
                     await self._analyze_once(native_analyzer)
                 except Exception:
                     logger.exception(
@@ -310,7 +310,8 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
                             **self.collector.stream_info,
                         ),
                     )
-                self._analysis_in_flight = False
+                finally:
+                    self._analysis_in_flight = False
                 if self._reset_pending:
                     self._reset_pending = False
                     native_analyzer.reset()
