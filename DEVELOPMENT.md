@@ -60,7 +60,8 @@ rest of the pipeline.
 
 Python schedules inference with an asyncio task and runs each blocking `analyze_buffered()` call
 through `asyncio.to_thread()`. Shutdown waits for an active inference before terminating the SDK
-session. Node uses a timer around the SDK's synchronous `analyze()` API. Both runtimes emit
+session. The binding cannot reset the analyzer during inference. A stream-boundary reset that
+occurs during an inference applies when the inference returns. Node uses a timer around the SDK's synchronous `analyze()` API. Both runtimes emit
 a plugin-level result event after every successful scheduled call without logging the result by
 default. They also record aggregate score, inference-duration, and success/error count instruments
 through the process-wide OpenTelemetry metrics API; operational errors remain logged and fail-open

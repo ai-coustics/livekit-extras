@@ -120,7 +120,13 @@ class Collector(rtc.FrameProcessor[rtc.AudioFrame]):
         if self._closed:
             return
         self._has_buffered_audio = False
-        self._reset_analyzer()
+        try:
+            self._reset_analyzer()
+        except Exception:
+            logger.exception(
+                "Collector: reset failed",
+                extra=log_fields("collector", **self._stream_info),
+            )
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
         collector = self._collector
@@ -200,10 +206,12 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
         self._enable_metrics = enable_metrics
         self._sequence = 0
         self._closed = False
+        self._analysis_in_flight = False
+        self._reset_pending = False
         self._close_event = asyncio.Event()
         self.collector = Collector(
             native_collector,
-            reset_analyzer=native_analyzer.reset,
+            reset_analyzer=lambda: self._request_reset(native_analyzer),
             close_analyzer=self._request_close,
         )
         self._task = loop.create_task(
@@ -291,6 +299,7 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
                 if not self.collector.initialized:
                     continue
                 try:
+                    self._analysis_in_flight = True
                     await self._analyze_once(native_analyzer)
                 except Exception:
                     logger.exception(
@@ -301,8 +310,21 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
                             **self.collector.stream_info,
                         ),
                     )
+                finally:
+                    self._analysis_in_flight = False
+                if self._reset_pending:
+                    self._reset_pending = False
+                    native_analyzer.reset()
         finally:
             await asyncio.to_thread(native_analyzer.terminate_session)
+
+    def _request_reset(self, native_analyzer: aic_sdk.Analyzer) -> None:
+        # analyze_buffered() holds a mutable borrow in a worker thread. A reset during that call
+        # raises.
+        if self._analysis_in_flight:
+            self._reset_pending = True
+        else:
+            native_analyzer.reset()
 
     def _request_close(self) -> None:
         if self._closed:
