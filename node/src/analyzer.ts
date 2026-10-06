@@ -162,6 +162,10 @@ export class Collector extends FrameProcessor<AudioFrame> {
     this.resetAnalyzer();
   }
 
+  clearBuffered(): void {
+    this.hasBufferedAudio = false;
+  }
+
   detach(): void {
     this.closed = true;
     this.collectingEnabled = false;
@@ -225,6 +229,9 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
         if (!this.resetPending) return;
         this.resetPending = false;
         this.nativeAnalyzer?.reset();
+        // Frames that arrived during the analysis set the flag again, but the reset discarded
+        // them.
+        this.collector.clearBuffered();
       });
     }, analysisInterval * 1000);
     this.timer.unref?.();

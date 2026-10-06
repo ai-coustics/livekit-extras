@@ -434,6 +434,46 @@ async def test_stream_info_hooks_defer_reset_until_in_flight_analysis_returns(
 
 
 @pytest.mark.asyncio
+async def test_deferred_reset_clears_frames_buffered_during_analysis(
+    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, native_analyzer, _ = fake_sdk
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_analysis(function: Callable[..., object], /, *args: object) -> object:
+        if function == native_analyzer.analyze_buffered:
+            in_flight.set()
+            await release.wait()
+        return function(*args)
+
+    monkeypatch.setattr("ai_coustics.livekit.analyzer.asyncio.to_thread", hold_analysis)
+    analyzer = Analyzer(
+        model=cast(aic_sdk.Model, FakeModel()),
+        license_key="test-license",
+        analysis_interval=0.01,
+    )
+    analyzer.collector._process(make_frame())
+    await wait_until(in_flight.is_set)
+
+    analyzer.collector._on_stream_info_updated(
+        room_name="test-room",
+        participant_identity="test-participant",
+        publication_sid="TR_test",
+    )
+    analyzer.collector._process(make_frame())
+    assert analyzer.collector.initialized
+
+    release.set()
+    await wait_until(lambda: native_analyzer.reset_calls == 1)
+    assert not analyzer.collector.initialized
+    await asyncio.sleep(0.05)
+    assert native_analyzer.analyze_calls == 1
+    await analyzer.aclose()
+
+
+@pytest.mark.asyncio
 async def test_reinitializes_collector_when_frame_format_changes(
     fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
 ) -> None:

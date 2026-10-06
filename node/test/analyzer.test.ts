@@ -388,6 +388,37 @@ describe("Analyzer", () => {
     analyzer.close();
   });
 
+  it("deferred reset clears frames buffered during analysis", async () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 0.01,
+    });
+    let release!: () => void;
+    sdk.analyzers[0]!.hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    analyzer.collector.process(makeFrame());
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sdk.analyzers[0]!.analyzeCalls).toBe(1);
+
+    analyzer.collector.onStreamInfoUpdated({
+      roomName: "test-room",
+      participantIdentity: "test-participant",
+      publicationSid: "TR_test",
+    });
+    analyzer.collector.process(makeFrame());
+    expect(analyzer.collector.initialized).toBe(true);
+
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sdk.analyzers[0]!.resetCalls).toBe(1);
+    expect(analyzer.collector.initialized).toBe(false);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(sdk.analyzers[0]!.analyzeCalls).toBe(1);
+    analyzer.close();
+  });
+
   it("reinitializes collector when frame format changes", () => {
     const analyzer = new Analyzer({
       model: { getId: () => "analysis-test-model" } as never,

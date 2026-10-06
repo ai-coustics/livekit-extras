@@ -124,6 +124,9 @@ class Collector(rtc.FrameProcessor[rtc.AudioFrame]):
         # until that call returns, so a handler is not necessary.
         self._reset_analyzer()
 
+    def _clear_buffered(self) -> None:
+        self._has_buffered_audio = False
+
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
         collector = self._collector
         if not self._enabled or collector is None:
@@ -307,6 +310,9 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
                 if self._reset_pending:
                     self._reset_pending = False
                     native_analyzer.reset()
+                    # Frames that arrived during the analysis set the flag again, but the reset
+                    # discarded them.
+                    self.collector._clear_buffered()
         finally:
             await asyncio.to_thread(native_analyzer.terminate_session)
 
