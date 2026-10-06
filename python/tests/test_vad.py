@@ -258,10 +258,16 @@ def test_wraps_native_vad_construction_errors(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("chunk", [1, 7, "block", "whole"])
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=[scenario["name"] for scenario in SCENARIOS])
-async def test_replays_shared_vad_scenario(scenario: dict[str, Any]) -> None:
+async def test_replays_shared_vad_scenario(
+    scenario: dict[str, Any],
+    chunk: int | str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    model = FakeModel(**scenario["model"])
     vad = create_vad(
-        model=FakeModel(**scenario["model"]),
+        model=model,
         vad_parameters=VADParameters(**scenario.get("vad_parameters", {})),
         **{
             option: scenario[option]
@@ -274,9 +280,28 @@ async def test_replays_shared_vad_scenario(scenario: dict[str, Any]) -> None:
     native.context.prediction_delay_samples = scenario["prediction_delay_samples"]
     native.predictions.extend(tuple(prediction) for prediction in scenario["predictions"])
 
-    ramp = np.arange(scenario["input_samples"], dtype=np.int16)
-    push_processed(vad, stream, make_frame(ramp, sample_rate=scenario["input_sample_rate"]))
-    events = await collect_events(stream)
+    ramp = np.arange(sum(step.get("samples", 0) for step in scenario["inputs"]), dtype=np.int16)
+    offset = 0
+    for step in scenario["inputs"]:
+        if "flush" in step:
+            stream.flush()
+            continue
+        if isinstance(chunk, int):
+            size = chunk
+        elif chunk == "block":
+            size = model.get_optimal_block_size(step["sample_rate"])
+        else:
+            size = step["samples"]
+        samples = ramp[offset : offset + step["samples"]]
+        offset += step["samples"]
+        for start in range(0, samples.size, size):
+            frame = make_frame(samples[start : start + size], sample_rate=step["sample_rate"])
+            push_processed(vad, stream, frame)
+    events = [
+        event
+        for event in await collect_events(stream)
+        if "event_types" not in scenario or event.type.value in scenario["event_types"]
+    ]
 
     for event, expected in zip(events, scenario["events"], strict=True):
         (frame,) = event.frames
@@ -295,6 +320,13 @@ async def test_replays_shared_vad_scenario(scenario: dict[str, Any]) -> None:
             "audio_start": audio[0],
             "audio_samples": audio.size,
         } == pytest.approx(expected)
+
+    expected_logs = scenario.get("logs", [])
+    messages = [record.getMessage() for record in caplog.records]
+    assert [
+        {"message": log["message"], "count": messages.count(log["message"])}
+        for log in expected_logs
+    ] == expected_logs
 
 
 @pytest.mark.asyncio
@@ -607,3 +639,85 @@ async def test_stream_close_does_not_terminate_shared_native_session() -> None:
 def test_validates_buffer_options(kwargs: dict[str, float], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         create_vad(**kwargs)
+
+
+def test_disabled_processor_passes_frames_through_without_inference() -> None:
+    vad = create_vad(model=FakeModel(block_size=4))
+    native = FakeVad.instances[0]
+    vad.processor._process(make_frame(np.array([1, 2, 3], dtype=np.int16)))
+
+    vad.processor.enabled = False
+    frame = make_frame(np.array([4, 5, 6, 7], dtype=np.int16))
+    assert vad.processor._process(frame) is frame
+    assert frame.userdata == {}
+    assert native.blocks == []
+
+    vad.processor.enabled = True
+    assert native.context.reset_count == 1
+    vad.processor._process(make_frame(np.array([8, 9, 10, 11], dtype=np.int16)))
+
+    assert len(native.initialized_configs) == 2
+    assert len(native.blocks) == 1
+    assert np.array_equal(native.blocks[0], np.array([8, 9, 10, 11]) / 32768)
+
+
+def test_stream_info_change_resets_processor() -> None:
+    vad = create_vad()
+    context = FakeVad.instances[0].context
+
+    vad.processor._on_stream_info_updated(
+        room_name="room", participant_identity="participant", publication_sid="TR_test"
+    )
+    vad.processor._on_stream_info_updated(
+        room_name="room", participant_identity="participant", publication_sid="TR_test"
+    )
+    assert context.reset_count == 0
+    vad.processor._on_stream_info_updated(
+        room_name="room", participant_identity="participant", publication_sid="TR_other"
+    )
+    assert context.reset_count == 1
+    vad.processor._on_stream_info_cleared()
+    assert context.reset_count == 2
+    vad.processor._on_stream_info_cleared()
+    assert context.reset_count == 2
+
+
+def test_closed_processor_passes_frames_and_rejects_parameters(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    vad = create_vad()
+    context = FakeVad.instances[0].context
+    vad.processor._close()
+
+    vad.set_parameters(VADParameters(sensitivity=0.8))
+    frame = make_frame(np.zeros(160, dtype=np.int16))
+
+    assert context.get_parameter(aic_sdk.VadParameter.Sensitivity) == 0.5
+    assert any(
+        record.message == "VAD: parameter rejected; keeping the current value"
+        for record in caplog.records
+    )
+    assert vad.processor._process(frame) is frame
+    assert frame.userdata == {}
+
+
+@pytest.mark.asyncio
+async def test_missing_metadata_error_logs_once_per_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    vad = create_vad()
+    stream = vad.stream()
+
+    for _ in range(25):
+        stream.push_frame(make_frame(np.zeros(160, dtype=np.int16)))
+    push_processed(vad, stream, make_frame(np.zeros(160, dtype=np.int16)))
+    for _ in range(10):
+        stream.push_frame(make_frame(np.zeros(160, dtype=np.int16)))
+    await collect_events(stream)
+
+    errors = [
+        record
+        for record in caplog.records
+        if record.message.startswith("VAD: no inference metadata found")
+    ]
+    assert len(errors) == 2

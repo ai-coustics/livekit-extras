@@ -90,11 +90,16 @@ def fake_sdk(
 class FakeInstrument:
     def __init__(self) -> None:
         self.measurements: list[tuple[float, dict[str, str]]] = []
+        self.error: Exception | None = None
 
     def add(self, value: float, *, attributes: dict[str, str]) -> None:
+        if self.error is not None:
+            raise self.error
         self.measurements.append((value, attributes))
 
     def record(self, value: float, *, attributes: dict[str, str]) -> None:
+        if self.error is not None:
+            raise self.error
         self.measurements.append((value, attributes))
 
 
@@ -120,6 +125,14 @@ def make_frame(*, channels: int = 1) -> rtc.AudioFrame:
         num_channels=channels,
         samples_per_channel=4,
     )
+
+
+async def wait_until(condition: Callable[[], bool]) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.005)
+    pytest.fail("condition was not met within one second")
 
 
 def test_metric_fields_exist_on_installed_sdk_analysis_result() -> None:
@@ -307,3 +320,260 @@ def test_rejects_invalid_analysis_interval(interval: float) -> None:
 def test_requires_running_event_loop() -> None:
     with pytest.raises(RuntimeError, match="event loop"):
         Analyzer(model=cast(aic_sdk.Model, FakeModel()), license_key="test-license")
+
+
+@pytest.mark.asyncio
+async def test_disabled_collector_passes_frames_without_buffering(
+    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
+) -> None:
+    native_collector, native_analyzer, _ = fake_sdk
+    analyzer = Analyzer(
+        model=cast(aic_sdk.Model, FakeModel()),
+        license_key="test-license",
+        analysis_interval=60.0,
+    )
+
+    analyzer.collector.enabled = False
+    frame = make_frame()
+    assert analyzer.collector._process(frame) is frame
+    assert native_collector.blocks == []
+
+    analyzer.collector.enabled = True
+    assert native_analyzer.reset_calls == 1
+    await analyzer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_analyzes_only_after_audio_is_buffered(
+    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
+) -> None:
+    _, native_analyzer, _ = fake_sdk
+    analyzer = Analyzer(
+        model=cast(aic_sdk.Model, FakeModel()),
+        license_key="test-license",
+        analysis_interval=0.01,
+    )
+
+    await asyncio.sleep(0.05)
+    assert native_analyzer.analyze_calls == 0
+
+    analyzer.collector._process(make_frame())
+    await wait_until(lambda: native_analyzer.analyze_calls >= 1)
+
+    analyzer.collector._on_stream_info_updated(
+        room_name="test-room",
+        participant_identity="test-participant",
+        publication_sid="TR_test",
+    )
+    calls = native_analyzer.analyze_calls
+    await asyncio.sleep(0.05)
+    assert native_analyzer.analyze_calls == calls
+
+    analyzer.collector._process(make_frame())
+    await wait_until(lambda: native_analyzer.analyze_calls > calls)
+    await analyzer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_collector_resets_on_every_stream_info_update(
+    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
+) -> None:
+    _, native_analyzer, _ = fake_sdk
+    analyzer = Analyzer(
+        model=cast(aic_sdk.Model, FakeModel()),
+        license_key="test-license",
+        analysis_interval=60.0,
+    )
+
+    for _ in range(2):
+        analyzer.collector._on_stream_info_updated(
+            room_name="test-room",
+            participant_identity="test-participant",
+            publication_sid="TR_test",
+        )
+
+    assert native_analyzer.reset_calls == 2
+    await analyzer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_reinitializes_collector_when_frame_format_changes(
+    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
+) -> None:
+    native_collector, _, _ = fake_sdk
+    analyzer = Analyzer(
+        model=cast(aic_sdk.Model, FakeModel()),
+        license_key="test-license",
+        analysis_interval=60.0,
+    )
+
+    formats = [
+        (16000, 1, 4),
+        (16000, 1, 4),
+        (48000, 1, 4),
+        (48000, 2, 4),
+        (48000, 1, 8),
+        (48000, 1, 8),
+    ]
+    for sample_rate, channels, samples_per_channel in formats:
+        analyzer.collector._process(
+            rtc.AudioFrame(
+                data=bytes(2 * channels * samples_per_channel),
+                sample_rate=sample_rate,
+                num_channels=channels,
+                samples_per_channel=samples_per_channel,
+            )
+        )
+
+    assert native_collector.inits == [
+        (16000, 4, False),
+        (48000, 4, False),
+        (48000, 4, False),
+        (48000, 8, False),
+    ]
+    await analyzer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_analysis_failure_is_logged_and_retried(
+    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _, native_analyzer, _ = fake_sdk
+    native_analyzer.error = RuntimeError("analysis failed")
+    analyzer = Analyzer(
+        model=cast(aic_sdk.Model, FakeModel()),
+        license_key="test-license",
+        analysis_interval=0.01,
+    )
+    events: list[AnalysisEvent] = []
+    analyzer.on("analysis_result", events.append)
+    analyzer.collector._process(make_frame())
+
+    with caplog.at_level(logging.ERROR, logger="ai_coustics.livekit"):
+        await wait_until(lambda: native_analyzer.analyze_calls >= 2)
+        native_analyzer.error = None
+        await wait_until(lambda: bool(events))
+    await analyzer.aclose()
+
+    assert any(
+        record.message == "Analyzer: buffered audio analysis failed" for record in caplog.records
+    )
+    assert events[0].sequence == 1
+
+
+@pytest.mark.asyncio
+async def test_throwing_listener_does_not_stop_analysis(
+    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    analyzer = Analyzer(
+        model=cast(aic_sdk.Model, FakeModel()),
+        license_key="test-license",
+        analysis_interval=0.01,
+    )
+    sequences: list[int] = []
+
+    def failing_listener(event: AnalysisEvent) -> None:
+        sequences.append(event.sequence)
+        # Only TypeError escapes rtc.EventEmitter.emit; it logs and swallows everything else.
+        raise TypeError("listener failed")
+
+    analyzer.on("analysis_result", failing_listener)
+    analyzer.collector._process(make_frame())
+
+    with caplog.at_level(logging.ERROR, logger="ai_coustics.livekit"):
+        await wait_until(lambda: len(sequences) >= 2)
+    await analyzer.aclose()
+
+    assert sequences[:2] == [1, 2]
+    assert any(
+        record.message == "Analyzer: result event emission failed" for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_metrics_failure_is_logged_and_event_still_emitted(
+    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
+    caplog: pytest.LogCaptureFixture,
+    metric_instruments: dict[str, FakeInstrument],
+) -> None:
+    metric_instruments["analysis"].error = RuntimeError("metrics failed")
+    analyzer = Analyzer(
+        model=cast(aic_sdk.Model, FakeModel()),
+        license_key="test-license",
+        analysis_interval=0.01,
+    )
+    events: list[AnalysisEvent] = []
+    analyzer.on("analysis_result", events.append)
+    analyzer.collector._process(make_frame())
+
+    with caplog.at_level(logging.ERROR, logger="ai_coustics.livekit"):
+        await wait_until(lambda: bool(events))
+    await analyzer.aclose()
+
+    assert any(record.message == "Analyzer: metrics recording failed" for record in caplog.records)
+    assert events[0].sequence == 1
+
+
+@pytest.mark.asyncio
+async def test_close_is_idempotent_and_collector_passes_frames_after_close(
+    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
+) -> None:
+    native_collector, native_analyzer, _ = fake_sdk
+    analyzer = Analyzer(
+        model=cast(aic_sdk.Model, FakeModel()),
+        license_key="test-license",
+        analysis_interval=60.0,
+    )
+
+    await analyzer.aclose()
+    await analyzer.aclose()
+    assert native_analyzer.terminate_calls == 1
+
+    frame = make_frame()
+    assert analyzer.collector._process(frame) is frame
+    assert native_collector.blocks == []
+
+
+@pytest.mark.asyncio
+async def test_aclose_waits_for_in_flight_analysis(
+    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, native_analyzer, _ = fake_sdk
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_analysis(function: Callable[..., object], /, *args: object) -> object:
+        if function == native_analyzer.analyze_buffered:
+            in_flight.set()
+            await release.wait()
+        return function(*args)
+
+    monkeypatch.setattr("ai_coustics.livekit.analyzer.asyncio.to_thread", hold_analysis)
+    analyzer = Analyzer(
+        model=cast(aic_sdk.Model, FakeModel()),
+        license_key="test-license",
+        analysis_interval=0.01,
+    )
+    events: list[AnalysisEvent] = []
+    analyzer.on("analysis_result", events.append)
+    analyzer.collector._on_stream_info_updated(
+        room_name="test-room",
+        participant_identity="test-participant",
+        publication_sid="TR_test",
+    )
+    analyzer.collector._process(make_frame())
+    await wait_until(in_flight.is_set)
+
+    close_task = asyncio.create_task(analyzer.aclose())
+    await asyncio.sleep(0)
+    assert not close_task.done()
+    assert native_analyzer.terminate_calls == 0
+
+    release.set()
+    await asyncio.wait_for(close_task, timeout=1.0)
+    assert native_analyzer.terminate_calls == 1
+    assert len(events) == 1
+    assert events[0].room_name is None

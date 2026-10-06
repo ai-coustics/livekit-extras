@@ -2,8 +2,7 @@
   {
     "name": "speech transitions",
     "model": {"sample_rate": 16000, "block_size": 160},
-    "input_sample_rate": 16000,
-    "input_samples": 640,
+    "inputs": [{"sample_rate": 16000, "samples": 640}],
     "prediction_delay_samples": 0,
     "vad_parameters": {"speech_hold_duration": 0.01},
     "predictions": [[0.1, false], [0.9, true], [0.8, true], [0.1, false]],
@@ -19,8 +18,7 @@
   {
     "name": "default silence floor",
     "model": {"sample_rate": 16000, "block_size": 160},
-    "input_sample_rate": 16000,
-    "input_samples": 4160,
+    "inputs": [{"sample_rate": 16000, "samples": 4160}],
     "prediction_delay_samples": 0,
     "predictions": [[0.9, true], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false], [0.1, false]],
     "events": [
@@ -57,8 +55,7 @@
   {
     "name": "prediction delay",
     "model": {"sample_rate": 16000, "block_size": 160},
-    "input_sample_rate": 48000,
-    "input_samples": 3840,
+    "inputs": [{"sample_rate": 48000, "samples": 3840}],
     "prediction_delay_samples": 960,
     "vad_parameters": {"speech_hold_duration": 0.03, "minimum_speech_duration": 0.02},
     "prefix_padding_duration": 0.0,
@@ -79,13 +76,13 @@
   {
     "name": "speech cap and rolling prefix",
     "model": {"sample_rate": 10, "block_size": 4},
-    "input_sample_rate": 10,
-    "input_samples": 20,
+    "inputs": [{"sample_rate": 10, "samples": 20}],
     "prediction_delay_samples": 0,
     "vad_parameters": {"minimum_speech_duration": 0.0},
     "prefix_padding_duration": 0.2,
     "max_buffered_speech": 0.5,
     "predictions": [[0.9, true], [0.1, false], [0.1, false], [0.9, true], [0.1, false]],
+    "logs": [{"message": "VAD: maximum buffered speech reached; ignoring further audio", "count": 2}],
     "events": [
       {"type": "inference_done", "samples_index": 4, "timestamp": 0.4, "speech_duration": 0.0, "silence_duration": 0.4, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.4, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 4},
       {"type": "start_of_speech", "samples_index": 4, "timestamp": 0.4, "speech_duration": 0.4, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.4, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 4},
@@ -96,6 +93,84 @@
       {"type": "start_of_speech", "samples_index": 16, "timestamp": 1.6, "speech_duration": 0.4, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.4, "raw_accumulated_silence": 0.0, "audio_start": 8, "audio_samples": 7},
       {"type": "inference_done", "samples_index": 20, "timestamp": 2.0, "speech_duration": 0.8, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.4, "audio_start": 16, "audio_samples": 4},
       {"type": "end_of_speech", "samples_index": 20, "timestamp": 2.0, "speech_duration": 0.4, "silence_duration": 0.4, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.4, "audio_start": 8, "audio_samples": 7}
+    ]
+  },
+  {
+    "name": "probability equal to sensitivity is raw speech",
+    "model": {"sample_rate": 16, "block_size": 4},
+    "inputs": [{"sample_rate": 16, "samples": 8}],
+    "prediction_delay_samples": 0,
+    "vad_parameters": {"sensitivity": 0.7},
+    "predictions": [[0.7, false], [0.6, false]],
+    "events": [
+      {"type": "inference_done", "samples_index": 4, "timestamp": 0.25, "speech_duration": 0.0, "silence_duration": 0.25, "probability": 0.7, "speaking": false, "raw_accumulated_speech": 0.25, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 4},
+      {"type": "inference_done", "samples_index": 8, "timestamp": 0.5, "speech_duration": 0.0, "silence_duration": 0.5, "probability": 0.6, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.25, "audio_start": 4, "audio_samples": 4}
+    ]
+  },
+  {
+    "name": "detection below sensitivity starts speech",
+    "model": {"sample_rate": 16, "block_size": 4},
+    "inputs": [{"sample_rate": 16, "samples": 8}],
+    "prediction_delay_samples": 0,
+    "predictions": [[0.1, false], [0.2, true]],
+    "events": [
+      {"type": "inference_done", "samples_index": 4, "timestamp": 0.25, "speech_duration": 0.0, "silence_duration": 0.25, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.25, "audio_start": 0, "audio_samples": 4},
+      {"type": "inference_done", "samples_index": 8, "timestamp": 0.5, "speech_duration": 0.0, "silence_duration": 0.5, "probability": 0.2, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.5, "audio_start": 4, "audio_samples": 4},
+      {"type": "start_of_speech", "samples_index": 8, "timestamp": 0.5, "speech_duration": 0.25, "silence_duration": 0.0, "probability": 0.2, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 8}
+    ]
+  },
+  {
+    "name": "raw speech restarts the hold countdown",
+    "model": {"sample_rate": 16, "block_size": 4},
+    "inputs": [{"sample_rate": 16, "samples": 20}],
+    "prediction_delay_samples": 0,
+    "vad_parameters": {"speech_hold_duration": 0.5},
+    "predictions": [[0.9, true], [0.1, false], [0.9, false], [0.1, false], [0.1, false]],
+    "event_types": ["start_of_speech", "end_of_speech"],
+    "events": [
+      {"type": "start_of_speech", "samples_index": 4, "timestamp": 0.25, "speech_duration": 0.25, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.25, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 4},
+      {"type": "end_of_speech", "samples_index": 20, "timestamp": 1.25, "speech_duration": 0.75, "silence_duration": 0.5, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.5, "audio_start": 0, "audio_samples": 20}
+    ]
+  },
+  {
+    "name": "flush during speech",
+    "model": {"sample_rate": 16, "block_size": 4},
+    "inputs": [{"sample_rate": 16, "samples": 6}, {"flush": true}, {"sample_rate": 16, "samples": 6}],
+    "prediction_delay_samples": 0,
+    "predictions": [[0.9, true], [0.9, true], [0.1, false]],
+    "events": [
+      {"type": "inference_done", "samples_index": 4, "timestamp": 0.25, "speech_duration": 0.0, "silence_duration": 0.25, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.25, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 4},
+      {"type": "start_of_speech", "samples_index": 4, "timestamp": 0.25, "speech_duration": 0.25, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.25, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 4},
+      {"type": "inference_done", "samples_index": 4, "timestamp": 0.25, "speech_duration": 0.0, "silence_duration": 0.25, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.25, "raw_accumulated_silence": 0.0, "audio_start": 4, "audio_samples": 4},
+      {"type": "start_of_speech", "samples_index": 4, "timestamp": 0.25, "speech_duration": 0.25, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.25, "raw_accumulated_silence": 0.0, "audio_start": 4, "audio_samples": 4},
+      {"type": "inference_done", "samples_index": 8, "timestamp": 0.5, "speech_duration": 0.5, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.25, "audio_start": 8, "audio_samples": 4},
+      {"type": "end_of_speech", "samples_index": 8, "timestamp": 0.5, "speech_duration": 0.25, "silence_duration": 0.25, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.25, "audio_start": 4, "audio_samples": 8}
+    ]
+  },
+  {
+    "name": "input ending during speech",
+    "model": {"sample_rate": 16, "block_size": 4},
+    "inputs": [{"sample_rate": 16, "samples": 10}],
+    "prediction_delay_samples": 0,
+    "vad_parameters": {"speech_hold_duration": 0.5},
+    "predictions": [[0.9, true], [0.1, false]],
+    "events": [
+      {"type": "inference_done", "samples_index": 4, "timestamp": 0.25, "speech_duration": 0.0, "silence_duration": 0.25, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.25, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 4},
+      {"type": "start_of_speech", "samples_index": 4, "timestamp": 0.25, "speech_duration": 0.25, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.25, "raw_accumulated_silence": 0.0, "audio_start": 0, "audio_samples": 4},
+      {"type": "inference_done", "samples_index": 8, "timestamp": 0.5, "speech_duration": 0.5, "silence_duration": 0.0, "probability": 0.1, "speaking": true, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.25, "audio_start": 4, "audio_samples": 4}
+    ]
+  },
+  {
+    "name": "sample rate change",
+    "model": {"sample_rate": 16, "block_size": 4},
+    "inputs": [{"sample_rate": 16, "samples": 6}, {"sample_rate": 32, "samples": 16}, {"flush": true}, {"sample_rate": 32, "samples": 8}],
+    "prediction_delay_samples": 0,
+    "predictions": [[0.1, false], [0.9, true], [0.9, true], [0.9, true]],
+    "logs": [{"message": "VAD: received frame with a different sample rate", "count": 2}],
+    "events": [
+      {"type": "inference_done", "samples_index": 4, "timestamp": 0.25, "speech_duration": 0.0, "silence_duration": 0.25, "probability": 0.1, "speaking": false, "raw_accumulated_speech": 0.0, "raw_accumulated_silence": 0.25, "audio_start": 0, "audio_samples": 4},
+      {"type": "inference_done", "samples_index": 8, "timestamp": 0.25, "speech_duration": 0.0, "silence_duration": 0.25, "probability": 0.9, "speaking": false, "raw_accumulated_speech": 0.25, "raw_accumulated_silence": 0.0, "audio_start": 22, "audio_samples": 8},
+      {"type": "start_of_speech", "samples_index": 8, "timestamp": 0.25, "speech_duration": 0.25, "silence_duration": 0.0, "probability": 0.9, "speaking": true, "raw_accumulated_speech": 0.25, "raw_accumulated_silence": 0.0, "audio_start": 22, "audio_samples": 8}
     ]
   }
 ]

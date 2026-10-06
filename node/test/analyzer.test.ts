@@ -27,7 +27,7 @@ const telemetry = vi.hoisted(() => {
     duration: [] as Array<{ value: number; attributes?: Record<string, unknown> }>,
     score: [] as Array<{ value: number; attributes?: Record<string, unknown> }>,
   };
-  return { measurements };
+  return { measurements, error: null as Error | null };
 });
 
 const sdk = vi.hoisted(() => {
@@ -102,10 +102,14 @@ vi.mock("@livekit/agents", async (importOriginal) => {
 vi.mock("@opentelemetry/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@opentelemetry/api")>();
   const instrument = (name: keyof typeof telemetry.measurements) => ({
-    add: (value: number, attributes?: Record<string, unknown>) =>
-      telemetry.measurements[name].push({ value, attributes }),
-    record: (value: number, attributes?: Record<string, unknown>) =>
-      telemetry.measurements[name].push({ value, attributes }),
+    add: (value: number, attributes?: Record<string, unknown>) => {
+      if (telemetry.error) throw telemetry.error;
+      telemetry.measurements[name].push({ value, attributes });
+    },
+    record: (value: number, attributes?: Record<string, unknown>) => {
+      if (telemetry.error) throw telemetry.error;
+      telemetry.measurements[name].push({ value, attributes });
+    },
   });
   return {
     ...actual,
@@ -139,6 +143,7 @@ describe("Analyzer", () => {
     telemetry.measurements.analysis.length = 0;
     telemetry.measurements.duration.length = 0;
     telemetry.measurements.score.length = 0;
+    telemetry.error = null;
   });
 
   afterEach(() => vi.useRealTimers());
@@ -291,4 +296,195 @@ describe("Analyzer", () => {
       ).toThrow(/analysisInterval/);
     },
   );
+
+  it("disabled collector passes frames without buffering", () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 60,
+    });
+
+    analyzer.collector.setEnabled(false);
+    const frame = makeFrame();
+    expect(analyzer.collector.process(frame)).toBe(frame);
+    expect(sdk.analyzers[0]!.blocks).toEqual([]);
+
+    analyzer.collector.setEnabled(true);
+    expect(sdk.analyzers[0]!.resetCalls).toBe(1);
+    analyzer.close();
+  });
+
+  it("analyzes only after audio is buffered", () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 0.01,
+    });
+
+    vi.advanceTimersByTime(50);
+    expect(sdk.analyzers[0]!.analyzeCalls).toBe(0);
+
+    analyzer.collector.process(makeFrame());
+    vi.advanceTimersByTime(10);
+    expect(sdk.analyzers[0]!.analyzeCalls).toBe(1);
+
+    analyzer.collector.onStreamInfoUpdated({
+      roomName: "test-room",
+      participantIdentity: "test-participant",
+      publicationSid: "TR_test",
+    });
+    vi.advanceTimersByTime(50);
+    expect(sdk.analyzers[0]!.analyzeCalls).toBe(1);
+
+    analyzer.collector.process(makeFrame());
+    vi.advanceTimersByTime(10);
+    expect(sdk.analyzers[0]!.analyzeCalls).toBe(2);
+    analyzer.close();
+  });
+
+  it("collector resets on every stream info update", () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 60,
+    });
+    const info = {
+      roomName: "test-room",
+      participantIdentity: "test-participant",
+      publicationSid: "TR_test",
+    };
+
+    analyzer.collector.onStreamInfoUpdated(info);
+    analyzer.collector.onStreamInfoUpdated(info);
+
+    expect(sdk.analyzers[0]!.resetCalls).toBe(2);
+    analyzer.close();
+  });
+
+  it("reinitializes collector when frame format changes", () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 60,
+    });
+    const formats: Array<[number, number, number]> = [
+      [16000, 1, 4],
+      [16000, 1, 4],
+      [48000, 1, 4],
+      [48000, 2, 4],
+      [48000, 1, 8],
+      [48000, 1, 8],
+    ];
+
+    for (const [sampleRate, channels, samplesPerChannel] of formats) {
+      analyzer.collector.process(
+        new AudioFrame(
+          new Int16Array(channels * samplesPerChannel),
+          sampleRate,
+          channels,
+          samplesPerChannel,
+        ),
+      );
+    }
+
+    expect(sdk.analyzers[0]!.initializations).toEqual([
+      [16000, 4, false],
+      [48000, 4, false],
+      [48000, 4, false],
+      [48000, 8, false],
+    ]);
+    analyzer.close();
+  });
+
+  it("analysis failure is logged and retried", () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 0.01,
+    });
+    const events: AnalysisEvent[] = [];
+    analyzer.on("analysisResult", (event) => events.push(event));
+    sdk.analyzers[0]!.error = new Error("analysis failed");
+    analyzer.collector.process(makeFrame());
+
+    vi.advanceTimersByTime(20);
+    expect(sdk.analyzers[0]!.analyzeCalls).toBe(2);
+    expect(logging.calls).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "Analyzer: buffered audio analysis failed",
+      }),
+    );
+
+    sdk.analyzers[0]!.error = null;
+    vi.advanceTimersByTime(10);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.sequence).toBe(1);
+    analyzer.close();
+  });
+
+  it("throwing listener does not stop analysis", () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 0.01,
+    });
+    const sequences: number[] = [];
+    analyzer.on("analysisResult", (event) => {
+      sequences.push(event.sequence);
+      throw new Error("listener failed");
+    });
+    analyzer.collector.process(makeFrame());
+
+    vi.advanceTimersByTime(20);
+
+    expect(sequences).toEqual([1, 2]);
+    expect(logging.calls).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "Analyzer: result event emission failed",
+      }),
+    );
+    analyzer.close();
+  });
+
+  it("metrics failure is logged and event still emitted", () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 0.01,
+    });
+    const events: AnalysisEvent[] = [];
+    analyzer.on("analysisResult", (event) => events.push(event));
+    telemetry.error = new Error("metrics failed");
+    analyzer.collector.process(makeFrame());
+
+    vi.advanceTimersByTime(10);
+
+    expect(logging.calls).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "Analyzer: metrics recording failed",
+      }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.sequence).toBe(1);
+    analyzer.close();
+  });
+
+  it("close is idempotent and collector passes frames after close", () => {
+    const analyzer = new Analyzer({
+      model: { getId: () => "analysis-test-model" } as never,
+      licenseKey: "test-license",
+      analysisInterval: 60,
+    });
+
+    analyzer.close();
+    analyzer.close();
+    expect(sdk.analyzers[0]!.terminateCalls).toBe(1);
+
+    const frame = makeFrame();
+    expect(analyzer.collector.process(frame)).toBe(frame);
+    expect(sdk.analyzers[0]!.blocks).toEqual([]);
+  });
 });

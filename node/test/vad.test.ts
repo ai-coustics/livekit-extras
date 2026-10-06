@@ -147,19 +147,22 @@ initializeLogger({ pretty: false, level: "silent" });
 interface Scenario {
   name: string;
   model: { sample_rate: number; block_size: number };
-  input_sample_rate: number;
-  input_samples: number;
+  inputs: Array<{ sample_rate: number; samples: number } | { flush: true }>;
   prediction_delay_samples: number;
   vad_parameters?: Record<string, number>;
   prefix_padding_duration?: number;
   max_buffered_speech?: number;
   predictions: Array<[number, boolean]>;
+  event_types?: string[];
+  logs?: Array<{ message: string; count: number }>;
   events: Array<Record<string, unknown>>;
 }
 
 const scenarios: Scenario[] = JSON.parse(
   readFileSync(new URL("../../testdata/vad_scenarios.json", import.meta.url), "utf8"),
 );
+const chunks = [1, 7, "block", "whole"] as const;
+const scenarioCases = scenarios.flatMap((scenario) => chunks.map((chunk) => ({ scenario, chunk })));
 
 const camelCase = (key: string) => key.replace(/_(\w)/g, (_, letter: string) => letter.toUpperCase());
 const milliseconds = (seconds?: number) => (seconds === undefined ? undefined : seconds * 1000);
@@ -296,9 +299,10 @@ describe("VAD", () => {
     warning.mockRestore();
   });
 
-  it.each(scenarios)("replays shared scenario: $name", async (scenario) => {
+  it.each(scenarioCases)("replays shared scenario: $scenario.name with chunk $chunk", async ({ scenario, chunk }) => {
+    const model = new sdk.FakeModel(scenario.model.sample_rate, scenario.model.block_size);
     const vad = new VAD({
-      model: new sdk.FakeModel(scenario.model.sample_rate, scenario.model.block_size),
+      model,
       licenseKey: "test-license",
       vadParameters: Object.fromEntries(
         Object.entries(scenario.vad_parameters ?? {}).map(([key, value]) => [
@@ -313,10 +317,37 @@ describe("VAD", () => {
     const native = sdk.instances[0]!;
     native.context.predictionDelay = scenario.prediction_delay_samples;
     native.predictions.push(...scenario.predictions);
+    const warnLog = vi.spyOn(log(), "warn");
+    const errorLog = vi.spyOn(log(), "error");
 
-    const ramp = Int16Array.from({ length: scenario.input_samples }, (_, index) => index);
-    pushProcessed(vad, stream, makeFrame(ramp, scenario.input_sample_rate));
-    const events = await collectEvents(stream);
+    const length = scenario.inputs.reduce(
+      (total, step) => total + ("flush" in step ? 0 : step.samples),
+      0,
+    );
+    const ramp = Int16Array.from({ length }, (_, index) => index);
+    let offset = 0;
+    for (const step of scenario.inputs) {
+      if ("flush" in step) {
+        stream.flush();
+        continue;
+      }
+      const size =
+        typeof chunk === "number"
+          ? chunk
+          : chunk === "block"
+            ? model.getOptimalBlockSize(step.sample_rate)
+            : step.samples;
+      const samples = ramp.subarray(offset, offset + step.samples);
+      offset += step.samples;
+      for (let start = 0; start < samples.length; start += size) {
+        pushProcessed(vad, stream, makeFrame(samples.slice(start, start + size), step.sample_rate));
+      }
+    }
+    const events = (await collectEvents(stream)).filter(
+      (event) =>
+        !scenario.event_types ||
+        scenario.event_types.includes(VADEventType[event.type].toLowerCase()),
+    );
 
     expect(events).toHaveLength(scenario.events.length);
     for (const [index, event] of events.entries()) {
@@ -337,6 +368,17 @@ describe("VAD", () => {
         audio_samples: audio.length,
       }).toEqual(approx(scenario.events[index]!));
     }
+
+    const expectedLogs = scenario.logs ?? [];
+    const messages = [...warnLog.mock.calls, ...errorLog.mock.calls].map((call) => call[1]);
+    expect(
+      expectedLogs.map(({ message }) => ({
+        message,
+        count: messages.filter((logged) => logged === message).length,
+      })),
+    ).toEqual(expectedLogs);
+    warnLog.mockRestore();
+    errorLog.mockRestore();
   });
 
   it("downmixes stereo and reblocks without resampling", async () => {
@@ -599,5 +641,112 @@ describe("VAD", () => {
           ...options,
         }),
     ).toThrow(message);
+  });
+
+  it("disabled processor passes frames through without inference", () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(16_000, 4),
+      licenseKey: "test-license",
+    });
+    const native = sdk.instances[0]!;
+    vad.processor.process(makeFrame(new Int16Array([1, 2, 3])));
+
+    vad.processor.setEnabled(false);
+    const frame = makeFrame(new Int16Array([4, 5, 6, 7]));
+    expect(vad.processor.process(frame)).toBe(frame);
+    expect(frame.userdata).toEqual({});
+    expect(native.blocks).toEqual([]);
+
+    vad.processor.setEnabled(true);
+    expect(native.context.resetCount).toBe(1);
+    vad.processor.process(makeFrame(new Int16Array([8, 9, 10, 11])));
+
+    expect(native.initializations).toEqual([
+      [16_000, 4, false],
+      [16_000, 4, false],
+    ]);
+    expect(native.blocks).toEqual([[8, 9, 10, 11].map((sample) => sample / 32768)]);
+  });
+
+  it("stream info change resets processor", () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    const context = sdk.instances[0]!.context;
+    const info = { roomName: "room", participantIdentity: "participant", publicationSid: "TR_test" };
+
+    vad.processor.onStreamInfoUpdated({ ...info });
+    vad.processor.onStreamInfoUpdated({ ...info });
+    expect(context.resetCount).toBe(0);
+    vad.processor.onStreamInfoUpdated({ ...info, publicationSid: "TR_other" });
+    expect(context.resetCount).toBe(1);
+    vad.processor.onStreamInfoCleared();
+    expect(context.resetCount).toBe(2);
+    vad.processor.onStreamInfoCleared();
+    expect(context.resetCount).toBe(2);
+  });
+
+  it("closed processor passes frames and rejects parameters", () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    const context = sdk.instances[0]!.context;
+    const warning = vi.spyOn(log(), "warn");
+    vad.processor.close();
+
+    vad.setParameters({ sensitivity: 0.8 });
+    const frame = makeFrame(new Int16Array(160));
+
+    expect(context.getParameter(sdk.VadParameter.Sensitivity)).toBe(0.5);
+    expect(warning).toHaveBeenCalledWith(
+      expect.anything(),
+      "VAD: parameter rejected; keeping the current value",
+    );
+    expect(vad.processor.process(frame)).toBe(frame);
+    expect(frame.userdata).toEqual({});
+    warning.mockRestore();
+  });
+
+  it("missing metadata error logs once per run", async () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    const stream = vad.stream();
+    const errorLog = vi.spyOn(log(), "error");
+
+    for (let index = 0; index < 25; index += 1) {
+      stream.pushFrame(makeFrame(new Int16Array(160)));
+    }
+    pushProcessed(vad, stream, makeFrame(new Int16Array(160)));
+    for (let index = 0; index < 10; index += 1) {
+      stream.pushFrame(makeFrame(new Int16Array(160)));
+    }
+    await collectEvents(stream);
+
+    expect(
+      errorLog.mock.calls.filter(([, message]) =>
+        message.startsWith("VAD: no inference metadata found"),
+      ),
+    ).toHaveLength(2);
+    errorLog.mockRestore();
+  });
+
+  it("closes open streams and the shared session on VAD close", async () => {
+    const vad = new VAD({
+      model: new sdk.FakeModel(),
+      licenseKey: "test-license",
+    });
+    const stream = vad.stream();
+    const native = sdk.instances[0]!;
+
+    await vad.close();
+    expect((await stream.next()).done).toBe(true);
+    expect(native.terminateCalls).toBe(1);
+
+    await vad.close();
+    expect(native.terminateCalls).toBe(1);
   });
 });
