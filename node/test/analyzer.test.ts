@@ -41,7 +41,6 @@ const sdk = vi.hoisted(() => {
     resetCalls = 0;
     terminateCalls = 0;
     error: Error | null = null;
-    resetError: Error | null = null;
 
     constructor() {
       analyzers.push(this);
@@ -71,7 +70,6 @@ const sdk = vi.hoisted(() => {
 
     reset(): void {
       this.resetCalls += 1;
-      if (this.resetError) throw this.resetError;
     }
 
     terminateSession(): void {
