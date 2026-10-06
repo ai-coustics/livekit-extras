@@ -1,20 +1,20 @@
 # ai-coustics LiveKit extras for Node.js
 
-Voice activity detection and audio-quality analysis for LiveKit Agents, backed by the public
+Voice activity detection and Audio Insight for LiveKit Agents, backed by the
 `@ai-coustics/aic-sdk` package.
 
 > [!IMPORTANT]
-> The official
-> [`@livekit/plugins-ai-coustics`](https://www.npmjs.com/package/@livekit/plugins-ai-coustics)
-> package is the recommended integration path for most applications. It supports LiveKit Cloud,
-> integrates more deeply with the LiveKit ecosystem and tooling, and offers stronger stability
-> guarantees. Avoiding breaking changes is an explicit goal of the official plugin.
->
-> This ai-coustics-maintained package follows a faster release cadence and is designed for teams
-> that want early access to the latest ai-coustics models and product features. Some of those
-> capabilities may be experimental and subject to change, and use of this package is billed
-> separately through ai-coustics. Choose it when early adoption of new ai-coustics capabilities is
-> important for your application.
+> Use the official LiveKit plugin for ai-coustics speech enhancement. ai-coustics LiveKit extras
+> adds product categories that the official plugin does not support yet. Features here can change
+> between releases. Usage is billed through ai-coustics.
+
+## Feature Availability
+
+| Feature | `@ai-coustics/livekit-extras` | `@livekit/plugins-ai-coustics` |
+| --- | --- | --- |
+| Speech Enhancement | No | Yes |
+| Voice Activity Detection (`VAD`) | Dedicated Models | Legacy |
+| Audio Insight (Tyto `Analyzer`) | Yes | No |
 
 ## Installation
 
@@ -23,20 +23,22 @@ npm install @ai-coustics/livekit-extras
 export AIC_SDK_LICENSE=...
 ```
 
-This package is separate from `@livekit/plugins-ai-coustics`, which provides speech enhancement,
-and can be installed alongside it.
+## Using this plugin next to the official plugin
 
-## Migrating from the official plugin's VAD
+You can install this package and the official
+[`@livekit/plugins-ai-coustics`](https://www.npmjs.com/package/@livekit/plugins-ai-coustics)
+package in the same project.
 
-| Official LiveKit plugin | This package |
-| --- | --- |
-| `vad()` and `vadSettings` | `new VAD({ model, vadParameters })` |
-| `Auth.livekitCloud()` or `Auth.aiCousticsApi(...)` | `AIC_SDK_LICENSE` or `licenseKey` |
+```bash
+npm install @livekit/plugins-ai-coustics @ai-coustics/livekit-extras
+```
 
-The official VAD reads its results from the official enhancement processor. This package uses a
-dedicated SDK VAD model instead. Provision a VAD model and install `vad.processor` as described
-below. LiveKit Cloud authentication is not carried over; obtain an ai-coustics SDK license before
-migrating.
+RoomIO has one `noiseCancellation` slot. `FrameProcessorChain` lets `vad.processor` and
+`analyzer.collector` share it. Install the official enhancement in that slot on its own, because
+`FrameProcessorChain` does not pass LiveKit Cloud credentials to its processors.
+
+This package needs its own ai-coustics license, even if the official plugin uses LiveKit Cloud.
+Set `AIC_SDK_LICENSE` or pass `licenseKey`.
 
 ## Model provisioning
 
@@ -88,7 +90,7 @@ await session.start({
 streams read the immutable metadata it attaches to each frame, so the SDK model runs only once per
 audio block.
 
-### Audio-quality analysis
+### Audio Insight
 
 Create an `Analyzer`, install its collector in RoomIO's audio path, and subscribe to its results:
 

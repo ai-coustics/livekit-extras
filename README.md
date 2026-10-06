@@ -6,7 +6,7 @@ ai-coustics SDKs and let LiveKit agents use:
 
 - `VAD` for voice activity detection with a dedicated SDK VAD model, through `vad.processor` and
   LiveKit's streaming VAD interface.
-- `Analyzer` for periodic audio-quality analysis.
+- `Analyzer` for periodic Audio Insight analysis.
 - `FrameProcessorChain` for applying any number of frame processors in sequence.
 
 Applications choose and provision the SDK models themselves. This keeps model selection, storage,
@@ -14,16 +14,17 @@ and deployment under application control while the plugins handle LiveKit audio 
 lifecycle, observability, and error recovery.
 
 > [!IMPORTANT]
-> The official LiveKit plugins are the recommended integration path for most applications. They
-> support LiveKit Cloud, integrate more deeply with the LiveKit ecosystem and tooling, and offer
-> stronger stability guarantees. Avoiding breaking changes is an explicit goal of the official
-> plugins.
->
-> The ai-coustics-maintained plugins in this repository follow a faster release cadence and are
-> designed for teams that want early access to the latest ai-coustics models and product features.
-> Some of those capabilities may be experimental and subject to change, and use of these plugins is
-> billed separately through ai-coustics. Choose them when early adoption of new ai-coustics
-> capabilities is important for your application.
+> Use the official LiveKit plugin for ai-coustics speech enhancement. ai-coustics LiveKit extras
+> adds product categories that the official plugin does not support yet. Features here can change
+> between releases. Usage is billed through ai-coustics.
+
+## Feature Availability
+
+| Feature | ai-coustics LiveKit extras | Official LiveKit plugin |
+| --- | --- | --- |
+| Speech Enhancement | No | Yes |
+| Voice Activity Detection (`VAD`) | Dedicated Models | Legacy |
+| Audio Insight (Tyto `Analyzer`) | Yes | No |
 
 ## Packages
 
