@@ -40,7 +40,7 @@ const sdk = vi.hoisted(() => {
       return this.detected;
     }
 
-    rawVadProbability(): number {
+    getRawVadProbability(): number {
       return this.probability;
     }
 
@@ -60,6 +60,8 @@ const sdk = vi.hoisted(() => {
   }
 
   class FakeModel {
+    readonly queriedSampleRates: number[] = [];
+
     constructor(
       readonly sampleRate = 16_000,
       readonly blockSize = 160,
@@ -74,8 +76,11 @@ const sdk = vi.hoisted(() => {
     }
 
     getOptimalBlockSize(sampleRate: number): number {
+      this.queriedSampleRates.push(sampleRate);
       return Math.round((this.blockSize * sampleRate) / this.sampleRate);
     }
+
+    dispose(): void {}
   }
 
   class FakeVad {
@@ -117,12 +122,9 @@ const sdk = vi.hoisted(() => {
     }
   }
 
-  class FakeProcessor {}
-
   return {
     FakeContext,
     FakeModel,
-    FakeProcessor,
     FakeVad,
     VadParameter,
     instances,
@@ -132,8 +134,6 @@ const sdk = vi.hoisted(() => {
 
 vi.mock("@ai-coustics/aic-sdk", () => ({
   Model: sdk.FakeModel,
-  Processor: sdk.FakeProcessor,
-  ProcessorParameter: { Bypass: 0, EnhancementLevel: 1 },
   Vad: sdk.FakeVad,
   VadParameter: sdk.VadParameter,
   _setSdkId: (id: number) => sdk.nativeCalls.push(["sdk_id", id]),
@@ -406,6 +406,30 @@ describe("VAD", () => {
     expect(events[0]!.frames[0]!.channels).toBe(1);
   });
 
+  it("reinitializes only when the input sample rate changes", () => {
+    const model = new sdk.FakeModel(16_000, 4);
+    const vad = new VAD({ model, licenseKey: "test-license" });
+    const native = sdk.instances[0]!;
+    model.queriedSampleRates.length = 0;
+
+    for (const [samples, sampleRate] of [
+      [3, 16_000],
+      [7, 16_000],
+      [2, 16_000],
+      [12, 48_000],
+      [12, 48_000],
+    ] as const) {
+      vad.processor.process(makeFrame(new Int16Array(samples), sampleRate));
+    }
+
+    expect(model.queriedSampleRates).toEqual([16_000, 48_000]);
+    expect(native.initializations).toEqual([
+      [16_000, 4, false],
+      [48_000, 12, false],
+    ]);
+    expect(native.blocks.map((block) => block.length)).toEqual([4, 4, 4, 12, 12]);
+  });
+
   it("caps contiguous speech and keeps the rolling prefix current", async () => {
     const vad = new VAD({
       model: new sdk.FakeModel(10, 4),
@@ -542,7 +566,7 @@ describe("VAD", () => {
     errorLog.mockRestore();
   });
 
-  it("runs VAD on original audio before a downstream processor replaces it", async () => {
+  it("keeps VAD audio when a downstream processor replaces the frame", async () => {
     const vad = new VAD({
       model: new sdk.FakeModel(16_000, 4),
       licenseKey: "test-license",

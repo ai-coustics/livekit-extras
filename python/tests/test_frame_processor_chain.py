@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from livekit import rtc
-from livekit.plugins.ai_coustics import FrameProcessorChain
+
+from ai_coustics.livekit import FrameProcessorChain
 
 
 def make_frame(value: int) -> rtc.AudioFrame:

@@ -29,14 +29,13 @@ jobs:
       - run: uv run ruff format --check .
       - if: matrix.python-version != '3.10'
         run: uv run mypy
-      - run: uv run pytest tests/test_analyzer.py tests/test_processor.py tests/test_vad.py -q
+      - run: uv run pytest tests/test_analyzer.py tests/test_vad.py -q
 
   python-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     env:
-      AIC_INTEGRATION_MODEL_ID: quail-vf-2.2-s-16khz
       AIC_INTEGRATION_VAD_MODEL_ID: vad-2.1-xxs-16khz
       AIC_INTEGRATION_ANALYSIS_MODEL_ID: tyto-1.1-l-16khz
       LIVEKIT_URL: ws://127.0.0.1:7880
@@ -54,13 +53,13 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/aic-sdk/models
-          key: aic-model-${{ runner.os }}-${{ env.AIC_INTEGRATION_MODEL_ID }}-${{ env.AIC_INTEGRATION_VAD_MODEL_ID }}-${{ env.AIC_INTEGRATION_ANALYSIS_MODEL_ID }}
+          key: aic-model-${{ runner.os }}-${{ env.AIC_INTEGRATION_VAD_MODEL_ID }}-${{ env.AIC_INTEGRATION_ANALYSIS_MODEL_ID }}
       - run: uv sync --dev
       - name: Require the SDK license
         env:
           AIC_SDK_LICENSE: ${{ secrets.AIC_SDK_LICENSE }}
         run: test -n "$AIC_SDK_LICENSE"
-      - name: Native Processor, VAD, and Analyzer integration tests
+      - name: Native VAD and Analyzer integration tests
         env:
           AIC_SDK_LICENSE: ${{ secrets.AIC_SDK_LICENSE }}
         run: uv run pytest tests/test_integration.py -q
@@ -112,7 +111,6 @@ jobs:
     timeout-minutes: 15
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     env:
-      AIC_INTEGRATION_MODEL_ID: quail-vf-2.2-s-16khz
       AIC_INTEGRATION_ANALYSIS_MODEL_ID: tyto-1.1-l-16khz
       LIVEKIT_URL: ws://127.0.0.1:7880
       LIVEKIT_API_KEY: devkey
@@ -131,13 +129,13 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/aic-sdk/models
-          key: aic-model-${{ runner.os }}-${{ env.AIC_INTEGRATION_MODEL_ID }}-${{ env.AIC_INTEGRATION_ANALYSIS_MODEL_ID }}-node
+          key: aic-model-${{ runner.os }}-${{ env.AIC_INTEGRATION_ANALYSIS_MODEL_ID }}-node
       - run: npm ci
       - name: Require the SDK license
         env:
           AIC_SDK_LICENSE: ${{ secrets.AIC_SDK_LICENSE }}
         run: test -n "$AIC_SDK_LICENSE"
-      - name: Native Processor integration tests
+      - name: Native VAD and Analyzer integration tests
         env:
           AIC_SDK_LICENSE: ${{ secrets.AIC_SDK_LICENSE }}
         run: npm run test:integration

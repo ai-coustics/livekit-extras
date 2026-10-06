@@ -1,6 +1,6 @@
 # ai-coustics LiveKit extras for Python
 
-Audio enhancement, voice activity detection, and audio-quality analysis for LiveKit Agents, backed by the public
+Voice activity detection and audio-quality analysis for LiveKit Agents, backed by the public
 `aic-sdk` package.
 
 > [!IMPORTANT]
@@ -18,81 +18,62 @@ Audio enhancement, voice activity detection, and audio-quality analysis for Live
 
 ## Installation
 
-> This package is an alternative to `livekit-plugins-ai-coustics`, not an extension of it. Do not
-> install both packages because they provide the same `livekit.plugins.ai_coustics` import path.
-
 ```bash
-pip uninstall livekit-plugins-ai-coustics
 pip install ai-coustics-livekit-extras
 export AIC_SDK_LICENSE=...
 ```
 
-## Migrating from the official LiveKit plugin
+This package imports as `ai_coustics.livekit`. It is separate from `livekit-plugins-ai-coustics`,
+which provides speech enhancement under `livekit.plugins.ai_coustics`, and can be installed
+alongside it.
 
-The Python import remains `livekit.plugins.ai_coustics`, but the public APIs are different:
+## Migrating from the official plugin's VAD
 
 | Official LiveKit plugin | This package |
 | --- | --- |
-| `audio_enhancement(...)` | `Processor(model=...)` |
-| `EnhancerModel.*` | An SDK `Model` loaded from a provisioned model file |
-| `ModelParameters` or `update_model_parameters(...)` | `processor.get_context().set_parameter(...)` |
 | `VAD()` and `VadSettings` | `VAD(model=..., vad_parameters=VADParameters(...))` |
 | `Auth.livekit_cloud()` or `Auth.ai_coustics_api(...)` | `AIC_SDK_LICENSE` or `license_key=` |
 
-Before:
-
-```python
-processor = ai_coustics.audio_enhancement(
-    model=ai_coustics.EnhancerModel.QUAIL_L,
-)
-vad = ai_coustics.VAD()
-```
-
-After loading the SDK models as described below:
-
-```python
-processor = ai_coustics.Processor(model=enhancement_model)
-vad = ai_coustics.VAD(model=vad_model)
-frame_processor = ai_coustics.FrameProcessorChain(vad.processor, processor)
-```
-
-This package still uses a dedicated SDK VAD model. Like the official plugin, inference runs in the
-RoomIO frame-processor path and the VAD streams consume frame metadata. Provision a separate VAD
-model and install `vad.processor` as described below. LiveKit Cloud authentication is not carried
-over; obtain an ai-coustics SDK license before migrating.
+The official VAD reads its results from the official enhancement processor. This package uses a
+dedicated SDK VAD model instead. Provision a VAD model and install `vad.processor` as described
+below. LiveKit Cloud authentication is not carried over; obtain an ai-coustics SDK license before
+migrating.
 
 ## Model provisioning
 
 Download models during deployment or container setup:
 
 ```python
-from livekit.plugins import ai_coustics
+from ai_coustics.livekit import Model
 
-enhancement_path = ai_coustics.Model.download("quail-vf-2.2-l-16khz", "./models")
-vad_path = ai_coustics.Model.download("vad-2.1-xxs-16khz", "./models")
-analysis_path = ai_coustics.Model.download("tyto-1.1-l-16khz", "./models")
+vad_path = Model.download("vad-2.1-xxs-16khz", "./models")
+analysis_path = Model.download("tyto-1.1-l-16khz", "./models")
 ```
 
-Enhancement and VAD models are different model types. Make the returned paths available to your
+VAD and analysis models are different model types. Make the returned paths available to your
 worker, then load each model once per worker process:
 
 ```python
-enhancement_model = ai_coustics.Model.from_file(enhancement_path)
-vad_model = ai_coustics.Model.from_file(vad_path)
-analysis_model = ai_coustics.Model.from_file(analysis_path)
+vad_model = Model.from_file(vad_path)
+analysis_model = Model.from_file(analysis_path)
 ```
 
 ## Usage
 
-Create a `Processor` and `VAD` for each agent session:
+RoomIO accepts one frame processor in its `noise_cancellation` slot. Install `vad.processor` or
+`analyzer.collector` there directly, or combine them with `FrameProcessorChain` as described in
+[Combining frame processors](#combining-frame-processors).
+
+### Voice activity detection
+
+Create a `VAD` for each agent session:
 
 ```python
 from livekit.agents import AgentSession, room_io
-from livekit.plugins import ai_coustics
 
-processor = ai_coustics.Processor(model=enhancement_model)
-vad = ai_coustics.VAD(model=vad_model)
-frame_processor = ai_coustics.FrameProcessorChain(vad.processor, processor)
+from ai_coustics.livekit import VAD
+
+vad = VAD(model=vad_model)
 
 session = AgentSession(
     vad=vad,
@@ -102,31 +83,30 @@ session = AgentSession(
 await session.start(
     # ... agent, room
     room_options=room_io.RoomOptions(
-        audio_input=room_io.AudioInputOptions(noise_cancellation=frame_processor),
+        audio_input=room_io.AudioInputOptions(noise_cancellation=vad.processor),
     ),
 )
 ```
 
-`vad.processor` must be installed in the `noise_cancellation` path whenever the VAD is used. Put
-it first in the chain so it runs on original microphone audio before enhancement. All VAD streams
-read the resulting immutable metadata, so the SDK model runs only once per audio block.
-
-For VAD without enhancement, use `noise_cancellation=vad.processor`. For enhancement without VAD,
-use `noise_cancellation=processor`.
+`vad.processor` must be installed in the `noise_cancellation` path whenever the VAD is used. All
+VAD streams read the immutable metadata it attaches to each frame, so the SDK model runs only once
+per audio block.
 
 ### Audio-quality analysis
 
 Create an `Analyzer`, install its collector in RoomIO's audio path, and subscribe to its results:
 
 ```python
-analyzer = ai_coustics.Analyzer(
+from ai_coustics.livekit import AnalysisEvent, Analyzer
+
+analyzer = Analyzer(
     model=analysis_model,
     analysis_interval=5.0,  # seconds; 5 is the default
 )
 
 
 @analyzer.on("analysis_result")
-def on_analysis(event: ai_coustics.AnalysisEvent) -> None:
+def on_analysis(event: AnalysisEvent) -> None:
     print(event.result.risk_score)
 
 
@@ -141,21 +121,20 @@ await session.start(
 ```
 
 The `Analyzer` receives audio through `analyzer.collector`; constructing the analyzer without
-installing its collector does not feed it any room audio.
+installing its collector does not feed it any room audio. RoomIO closes the collector, and with it
+the analyzer, when the input stream ends.
 
 Results are not logged by the plugin; log or handle them in the callback.
 
 ### Combining frame processors
 
 Use `FrameProcessorChain` to run any number of processors in the same RoomIO audio path. For
-example, this runs VAD inference and analysis on the raw input before enhancement:
+example, this runs VAD inference and analysis in one session:
 
 ```python
-frame_processor = ai_coustics.FrameProcessorChain(
-    vad.processor,
-    analyzer.collector,
-    processor,
-)
+from ai_coustics.livekit import FrameProcessorChain
+
+frame_processor = FrameProcessorChain(vad.processor, analyzer.collector)
 
 await session.start(
     # ... agent, room
@@ -168,26 +147,22 @@ await session.start(
 ```
 
 `FrameProcessorChain` runs its processors in order. Keep `vad.processor` first: it annotates the
-original frame while preserving its audio. We recommend placing `analyzer.collector` before
-`processor`; measuring raw input makes it easier to understand how input audio quality affects the
-rest of the pipeline.
+original frame while preserving its audio. We recommend placing `analyzer.collector` before any
+processor that changes the audio; measuring raw input makes it easier to understand how input audio
+quality affects the rest of the pipeline.
 
 This still uses LiveKit's `noise_cancellation` slot as a temporary integration. RoomIO owns the
-chain and closes the processor, collector, and analyzer together.
+chain and closes `vad.processor`, the collector, and the analyzer together.
 
 ## Configuration
 
-Set the enhancement level through the Processor context, and configure all SDK VAD parameters on
-the VAD factory:
+Configure all SDK VAD parameters on the VAD factory:
 
 ```python
-processor.get_context().set_parameter(
-    ai_coustics.ProcessorParameter.EnhancementLevel,
-    0.8,
-)
+from ai_coustics.livekit import VADParameters
 
 vad.set_parameters(
-    ai_coustics.VADParameters(
+    VADParameters(
         sensitivity=0.5,
         speech_hold_duration=0.25,
         minimum_speech_duration=0.05,
@@ -200,8 +175,8 @@ VAD durations are specified in seconds. See the
 [VAD guide](https://docs.ai-coustics.com/models/voice-activity-detection/vad) for parameter ranges,
 model support, and further details.
 
-Set `AIC_SDK_LICENSE` or pass `license_key=` to the constructor. Create a new Processor for each
-concurrent room; RoomIO closes it with the input stream.
+Set `AIC_SDK_LICENSE` or pass `license_key=` to the constructor. Create a new `VAD` or `Analyzer`
+for each concurrent room; RoomIO closes its frame processor with the input stream.
 
 Models must be provisioned explicitly. This package does not support
 `python -m livekit.agents download-files`.

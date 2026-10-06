@@ -31,9 +31,20 @@ const telemetry = vi.hoisted(() => {
 });
 
 const sdk = vi.hoisted(() => {
-  class FakeCollector {
+  const analyzers: FakeAnalyzer[] = [];
+  const sdkIds: number[] = [];
+
+  class FakeAnalyzer {
     initializations: Array<[number, number, boolean]> = [];
     blocks: number[][] = [];
+    analyzeCalls = 0;
+    resetCalls = 0;
+    terminateCalls = 0;
+    error: Error | null = null;
+
+    constructor() {
+      analyzers.push(this);
+    }
 
     initialize(sampleRate: number, blockSize: number, variable: boolean): void {
       this.initializations.push([sampleRate, blockSize, variable]);
@@ -42,15 +53,8 @@ const sdk = vi.hoisted(() => {
     buffer(samples: Float32Array): void {
       this.blocks.push(Array.from(samples));
     }
-  }
 
-  class FakeAnalyzer {
-    analyzeCalls = 0;
-    resetCalls = 0;
-    terminateCalls = 0;
-    error: Error | null = null;
-
-    analyzeBuffered() {
+    analyze() {
       this.analyzeCalls += 1;
       if (this.error) throw this.error;
       return {
@@ -75,28 +79,17 @@ const sdk = vi.hoisted(() => {
     updateBearerToken(): void {}
   }
 
-  const collectors: FakeCollector[] = [];
-  const analyzers: FakeAnalyzer[] = [];
-  const sdkIds: number[] = [];
-  return { FakeCollector, FakeAnalyzer, collectors, analyzers, sdkIds };
+  return { FakeAnalyzer, analyzers, sdkIds };
 });
 
 vi.mock("@ai-coustics/aic-sdk", () => ({
+  Analyzer: sdk.FakeAnalyzer,
   Model: class {},
-  Processor: class {},
-  ProcessorParameter: { Bypass: 0, EnhancementLevel: 1 },
   Vad: class {},
   VadParameter: {
     SpeechHoldDuration: 2,
     Sensitivity: 3,
     MinimumSpeechDuration: 4,
-  },
-  analyzerPair: () => {
-    const collector = new sdk.FakeCollector();
-    const analyzer = new sdk.FakeAnalyzer();
-    sdk.collectors.push(collector);
-    sdk.analyzers.push(analyzer);
-    return { collector, analyzer };
   },
   _setSdkId: (id: number) => sdk.sdkIds.push(id),
 }));
@@ -141,7 +134,6 @@ describe("Analyzer", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     logging.calls.length = 0;
-    sdk.collectors.length = 0;
     sdk.analyzers.length = 0;
     sdk.sdkIds.length = 0;
     telemetry.measurements.analysis.length = 0;
@@ -164,8 +156,8 @@ describe("Analyzer", () => {
 
     const frame = makeFrame(2);
     expect(analyzer.collector.process(frame)).toBe(frame);
-    expect(sdk.collectors[0]!.initializations).toEqual([[16000, 4, false]]);
-    expect(sdk.collectors[0]!.blocks[0]).toEqual([
+    expect(sdk.analyzers[0]!.initializations).toEqual([[16000, 4, false]]);
+    expect(sdk.analyzers[0]!.blocks[0]).toEqual([
       32767 / 32768,
       -1,
       0.5,

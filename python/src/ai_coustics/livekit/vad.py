@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import time
-import weakref
 from collections import deque
 from dataclasses import dataclass
 
 import aic_sdk
 import numpy as np
-
 from livekit import agents, rtc
 
+from .common import _license_key, _mono_pcm16, _pcm16_to_float32
 from .log import log_fields, logger
-from .processor import _license_key, _pcm16_to_float32
 
 _FRAME_USERDATA_VAD_ATTRIBUTE = "ai_coustics.vad"
 _SLOW_WARNING_INTERVAL = 10.0
@@ -44,15 +42,9 @@ class _InferenceResult:
 
 
 @dataclass(frozen=True)
-class _InferenceError:
-    message: str
-    cause: Exception
-
-
-@dataclass(frozen=True)
 class _FrameMetadata:
     results: tuple[_InferenceResult, ...] = ()
-    error: _InferenceError | None = None
+    error: Exception | None = None
 
 
 class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
@@ -72,8 +64,8 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
         self._model = model
         self._model_id = model.get_id()
-        self._native_vad: aic_sdk.Vad | None = native_vad
-        self._context: aic_sdk.VadContext | None = native_vad.get_context()
+        self._native_vad = native_vad
+        self._context = native_vad.get_context()
         self._enabled = True
         self._closed = False
         self._stream_info: dict[str, str] = {}
@@ -98,12 +90,12 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
     @property
     def context(self) -> aic_sdk.VadContext:
-        if self._context is None:
+        if self._closed:
             raise RuntimeError("Cannot get context from a closed ai-coustics VAD processor")
         return self._context
 
     def _reset(self) -> None:
-        if self._context is not None:
+        if not self._closed:
             self._context.reset()
         self._format = None
         self._inference_buffer.clear()
@@ -133,19 +125,14 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             self._stream_info = {}
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
-        if not self._enabled or self._native_vad is None or self._context is None:
+        if not self._enabled:
             return frame
 
         try:
             results = self._process_frame(frame)
             metadata = _FrameMetadata(results=tuple(results))
         except Exception as error:
-            metadata = _FrameMetadata(
-                error=_InferenceError(
-                    message=str(error),
-                    cause=error.__cause__ if isinstance(error.__cause__, Exception) else error,
-                )
-            )
+            metadata = _FrameMetadata(error=error)
 
         frame.userdata[_FRAME_USERDATA_VAD_ATTRIBUTE] = metadata
         return frame
@@ -153,25 +140,10 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     def _process_frame(self, frame: rtc.AudioFrame) -> list[_InferenceResult]:
         native_vad = self._native_vad
         context = self._context
-        assert native_vad is not None and context is not None
+        mono = _mono_pcm16(frame)
 
-        samples = np.frombuffer(frame.data, dtype=np.int16)
-        expected_samples = frame.samples_per_channel * frame.num_channels
-        if samples.size != expected_samples:
-            raise ValueError(
-                f"AudioFrame contains {samples.size} samples, expected {expected_samples}"
-            )
-
-        channels = samples.reshape(frame.samples_per_channel, frame.num_channels)
-        mono = (
-            channels[:, 0].copy()
-            if frame.num_channels == 1
-            else np.rint(channels.mean(axis=1, dtype=np.float32)).astype(np.int16)
-        )
-
-        inference_block_size = self._model.get_optimal_block_size(frame.sample_rate)
-        stream_format = (frame.sample_rate, inference_block_size)
-        if self._format != stream_format:
+        if self._format is None or self._format[0] != frame.sample_rate:
+            inference_block_size = self._model.get_optimal_block_size(frame.sample_rate)
             try:
                 native_vad.initialize(
                     aic_sdk.ProcessorConfig(
@@ -186,9 +158,11 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                     f"(model={self._model_id}, sample_rate={frame.sample_rate}, "
                     f"block_size={inference_block_size}): {error}"
                 ) from error
-            self._format = stream_format
+            self._format = (frame.sample_rate, inference_block_size)
             self._inference_buffer.clear()
             self._prediction_delay_samples = context.get_prediction_delay()
+        else:
+            inference_block_size = self._format[1]
 
         self._inference_buffer.extend(mono.tobytes())
         results: list[_InferenceResult] = []
@@ -276,22 +250,8 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             return
         self._closed = True
         self._enabled = False
-        native_vad = self._native_vad
-        self._native_vad = None
-        self._context = None
         self._inference_buffer.clear()
-        if native_vad is not None:
-            try:
-                native_vad.terminate_session()
-            except Exception as error:
-                logger.error(
-                    "VAD: session termination failed",
-                    extra=self._diagnostic_fields(
-                        error_type=type(error).__name__,
-                        error_message=str(error),
-                    ),
-                    exc_info=(type(error), error, error.__traceback__),
-                )
+        self._native_vad.terminate_session()
 
 
 class VAD(agents.vad.VAD):
@@ -326,7 +286,6 @@ class VAD(agents.vad.VAD):
             speech_hold_duration=_DEFAULT_SPEECH_HOLD_DURATION,
             minimum_speech_duration=_DEFAULT_MINIMUM_SPEECH_DURATION,
         )
-        self._streams: weakref.WeakSet[VADStream] = weakref.WeakSet()
         self._processor = VADProcessor(model=model, license_key=_license_key(license_key))
         self._default_speech_hold_duration = self._processor.context.get_parameter(
             aic_sdk.VadParameter.SpeechHoldDuration
@@ -356,14 +315,7 @@ class VAD(agents.vad.VAD):
         return self._default_speech_hold_duration
 
     def stream(self) -> VADStream:
-        stream = VADStream(
-            self,
-            processor=self._processor,
-            prefix_padding_duration=self._prefix_padding_duration,
-            max_buffered_speech=self._max_buffered_speech,
-        )
-        self._streams.add(stream)
-        return stream
+        return VADStream(self)
 
     def set_parameters(self, parameters: VADParameters) -> None:
         if parameters.sensitivity is not None and self._apply_parameter(
@@ -407,17 +359,10 @@ class VAD(agents.vad.VAD):
 
 
 class VADStream(agents.vad.VADStream):
-    def __init__(
-        self,
-        vad: VAD,
-        *,
-        processor: VADProcessor,
-        prefix_padding_duration: float,
-        max_buffered_speech: float,
-    ) -> None:
-        self._processor = processor
-        self._prefix_padding_duration = prefix_padding_duration
-        self._max_buffered_speech = max_buffered_speech
+    def __init__(self, vad: VAD) -> None:
+        self._processor = vad.processor
+        self._prefix_padding_duration = vad._prefix_padding_duration
+        self._max_buffered_speech = vad._max_buffered_speech
         self._missing_metadata_frames = 0
         super().__init__(vad)
 
@@ -531,7 +476,7 @@ class VADStream(agents.vad.VADStream):
                 if self._missing_metadata_frames == _MISSING_METADATA_WARNING_FRAMES:
                     logger.error(
                         "VAD: no inference metadata found; pass vad.processor as RoomIO "
-                        "noise_cancellation (or place it first in FrameProcessorChain)",
+                        "noise_cancellation",
                         extra=self._processor._diagnostic_fields(
                             missing_metadata_frames=self._missing_metadata_frames,
                         ),
@@ -539,7 +484,9 @@ class VADStream(agents.vad.VADStream):
                 continue
             self._missing_metadata_frames = 0
             if metadata.error is not None:
-                raise RuntimeError(metadata.error.message) from metadata.error.cause
+                error = metadata.error
+                cause = error.__cause__ if isinstance(error.__cause__, Exception) else error
+                raise RuntimeError(str(error)) from cause
 
             for result in metadata.results:
                 if not input_sample_rate:

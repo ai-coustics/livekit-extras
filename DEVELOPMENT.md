@@ -5,42 +5,37 @@ ai-coustics SDK. Develop and test each package from its own directory.
 
 ## Architecture
 
-`Processor` accepts an already-loaded SDK `Model`, never a model ID or file path. Both packages
-expose the SDK's `Model.from_file` / `Model.fromFile` and `Model.download` APIs so applications can
-choose when and where models are downloaded and loaded.
+`VAD` and `Analyzer` accept an already-loaded SDK `Model`, never a model ID or file path. Both
+packages expose the SDK's `Model.from_file` / `Model.fromFile` and `Model.download` APIs so
+applications can choose when and where models are downloaded and loaded.
 
-Model loading and native Processor construction happen when the filter is constructed. A
-synchronous SDK construction error is raised with its original error attached. Backend
-authentication continues asynchronously during the SDK's grace period, so the plugin does not
-process a throwaway frame to probe the license.
+Native SDK objects are created when the plugin object is constructed. A synchronous SDK
+construction error is raised with its original error attached. Backend authentication continues
+asynchronously during the SDK's grace period, so the plugin does not process a throwaway frame to
+probe the license.
 
-Processor format initialization is lazy because LiveKit supplies the complete stream geometry
-with the first frame. Each LiveKit frame is processed in one fixed-size SDK call, avoiding the
-additional latency of the SDK's variable-block-size mode. aic-sdk 3.1 for Python and 0.23 for Node
-process mono audio only, so multichannel LiveKit frames are downmixed before processing and the
-enhanced signal is duplicated across the original channel count. This preserves the LiveKit frame
-geometry and metadata.
+Audio format initialization is lazy because LiveKit supplies the complete stream geometry with the
+first frame. aic-sdk 3.3 for Python and 0.25 for Node process mono audio only, so multichannel
+LiveKit frames are downmixed before they reach the SDK.
 
-Processing errors are logged and the original LiveKit frame is returned. This fail-open behavior
-keeps room audio flowing if the SDK rejects a frame or encounters a runtime error. Processor logs
-use LiveKit's logging path and include the model, stream identity when available, audio format,
-failure stage, and timing context. Repeated failures and slower-than-realtime warnings are
-rate-limited; recovery and close events summarize the affected frames, processing time, real-time
-factor, and maximum accumulated processing backlog. The Node implementation falls back to the
-console for operational messages when LiveKit has not initialized its logger.
+Both frame processors return the original LiveKit frame, so SDK errors never stop room audio. The
+VAD processor attaches an inference error to the frame's metadata and the VAD stream reports it; the
+Collector logs the error and keeps passing audio through. Logs use LiveKit's logging path and
+include the model, stream identity when available, and audio format. The Node implementation falls
+back to the console for operational messages when LiveKit has not initialized its logger.
 
 Each `VAD` owns one synchronous native SDK VAD and exposes it through a pass-through
-`vad.processor`. That processor must be installed at the start of RoomIO's `noise_cancellation`
-path. It downmixes and reblocks original input audio, runs inference once, and attaches immutable
+`vad.processor`. That processor must be installed in RoomIO's `noise_cancellation` slot. It
+downmixes and reblocks original input audio, runs inference once, and attaches immutable
 per-block results to the frame's userdata. Every LiveKit `VADStream` consumes the same results, so
 creating additional streams does not create native VADs or repeat inference. A missing-metadata
 diagnostic identifies configurations that forgot to install `vad.processor`.
 
 Streams independently derive LiveKit inference and speech transition events from the shared
 snapshots. Event durations and speech lookback account for the SDK's prediction delay, while raw
-mono PCM stored in each snapshot keeps candidate audio aligned even when a later processor in the
-chain replaces the frame's audio. Closing a stream does not terminate the shared SDK session;
-RoomIO closes `vad.processor` directly or through `FrameProcessorChain`.
+mono PCM stored in each snapshot keeps candidate audio aligned even when a later frame processor
+replaces the frame's audio. Closing a stream does not terminate the shared SDK session; RoomIO
+closes `vad.processor` directly or through `FrameProcessorChain`.
 
 The wrapper overrides the model-specific SDK duration defaults with LiveKit-compatible values:
 50 ms minimum speech and a 250 ms speech hold. The latter satisfies the minimum silence required
@@ -48,21 +43,24 @@ by LiveKit's streaming turn detector. Because the SDK hold uses a rolling-majori
 wrapper also keeps an active LiveKit speech segment open until that much continuous raw silence
 has accumulated. Explicit `VADParameters` values still take precedence.
 
-Each `Analyzer` owns one SDK collector/analyzer pair. Its public `collector` is a transparent
-`FrameProcessor` installed in RoomIO's `noise_cancellation` slot: it lazily initializes from the
-first frame, downmixes PCM16 input to mono float32, buffers it, and returns the original frame
-unchanged. Stream boundaries reset the analyzer. Closing either the analyzer or its collector
-stops scheduling and terminates the SDK telemetry session.
+Each `Analyzer` owns one SDK analyzer: a collector/analyzer pair in Python, a single `Analyzer` in
+Node. Its public `collector` is a transparent `FrameProcessor` installed in RoomIO's
+`noise_cancellation` slot: it lazily initializes from the first frame, downmixes PCM16 input to
+mono float32, buffers it, and returns the original frame unchanged. Stream boundaries reset the
+analyzer. Closing either the analyzer or its collector stops scheduling and terminates the SDK
+telemetry session.
 
-`FrameProcessorChain` forwards stream-info lifecycle hooks and applies any number of enabled
-processors in constructor order. It lets a `Processor`, VAD processor, and Collector share
-RoomIO's single `noise_cancellation` slot. Placing the Collector before the enhancement Processor
-is recommended: analyzing original input audio helps explain how its quality affects the rest of
-the pipeline.
+RoomIO accepts one `noise_cancellation` frame processor. `FrameProcessorChain` lets
+`vad.processor`, `analyzer.collector`, and other frame processors share it. It applies its enabled
+processors in constructor order and forwards the stream-info lifecycle hooks to all of them. It
+does not forward the credential hooks. Closing the chain is idempotent and closes every child, then
+raises the first child error. Place `vad.processor` and `analyzer.collector` before any processor
+that changes the audio: analyzing original input audio helps explain how its quality affects the
+rest of the pipeline.
 
 Python schedules inference with an asyncio task and runs each blocking `analyze_buffered()` call
 through `asyncio.to_thread()`. Shutdown waits for an active inference before terminating the SDK
-session. Node uses a timer around the SDK's synchronous `analyzeBuffered()` API. Both runtimes emit
+session. Node uses a timer around the SDK's synchronous `analyze()` API. Both runtimes emit
 a plugin-level result event after every successful scheduled call without logging the result by
 default. They also record aggregate score, inference-duration, and success/error count instruments
 through the process-wide OpenTelemetry metrics API; operational errors remain logged and fail-open
@@ -71,14 +69,14 @@ for the room audio path.
 ## Logging convention
 
 Plugin diagnostics follow LiveKit's structured logging conventions in both runtimes. Python uses
-the `livekit.plugins.ai_coustics` logger and passes context through `extra`; Node writes an object
-before the message through LiveKit's Pino logger. Do not embed changing values or serialized
-objects in the message when they can be represented as fields.
+the `ai_coustics.livekit` logger and passes context through `extra`; Node writes an object before
+the message through LiveKit's Pino logger. Do not embed changing values or serialized objects in
+the message when they can be represented as fields.
 
-Human-readable messages use `Component: event`, for example `Processor: initialized` or
-`VAD: inference falling behind realtime`. Every plugin record also includes the stable fields
-`plugin=ai-coustics` and `component=processor|vad|analyzer|collector` (`logger` is reserved for a
-failure in the logging bridge itself). Python field names use
+Human-readable messages use `Component: event`, for example `VAD: inference falling behind
+realtime` or `Collector: failed; passing audio through`. Every plugin record also includes the
+stable fields `plugin=ai-coustics` and `component=vad|analyzer|collector` (`logger` is reserved for
+a failure in the logging bridge itself). Python field names use
 snake_case and durations are in seconds; Node field names use camelCase and durations are suffixed
 with `Ms`. Exceptions should retain the original exception/traceback in the logging API and add
 stable error fields where callers need to filter or aggregate failures.
@@ -96,43 +94,42 @@ logger; debug records remain silent in that case.
 The plugins do not currently participate in LiveKit Agents' `download-files` commands. Model
 provisioning must remain an explicit application or container-build step for now.
 
-Python already discovers and imports `livekit.plugins.ai_coustics`, and the package registers a
-LiveKit `Plugin`, but its inherited `download_files()` implementation is intentionally a no-op.
 The standalone command does not load the user's agent configuration or pass arguments to the
-plugin, so it cannot determine which arbitrary enhancement and VAD model IDs the application
-intends to use. Downloading a fixed model enum would conflict with this plugin's model-ID and
-file-path API.
+plugin, so it cannot determine which arbitrary VAD and analysis model IDs the application intends
+to use. Downloading a fixed model enum would conflict with this plugin's model-ID and file-path
+API.
 
-Node has the same model-selection problem plus a discovery limitation. The standalone LiveKit CLI
-only scans `node_modules/@livekit/agents-plugin-*`, so it does not import
-`@ai-coustics/livekit-extras`; registering a `Plugin.downloadFiles()` hook in our package would not
-make the modern command discover it.
+Both runtimes also have a discovery limitation. The Python package registers a LiveKit `Plugin`
+whose inherited `download_files()` implementation is a no-op, but it lives under
+`ai_coustics.livekit` rather than the `livekit.plugins` namespace, so the standalone command does
+not import it. The standalone Node CLI only scans `node_modules/@livekit/agents-plugin-*`, so it
+does not import `@ai-coustics/livekit-extras`; registering a `Plugin.downloadFiles()` hook in our
+package would not make the modern command discover it.
 
 A future implementation needs both an explicit, build-time source of model IDs and a stable way
 to resolve the downloaded versioned files without contacting the model manifest again at runtime.
-Node additionally needs an upstream LiveKit discovery mechanism for third-party package scopes,
+Both runtimes additionally need an upstream LiveKit discovery mechanism for third-party packages,
 such as package metadata or an explicit package list. Until those pieces exist, use
 `Model.download` during provisioning and construct runtime models from the returned files with
 `Model.from_file` / `Model.fromFile`.
 
 ### First-class streaming Analyzer integration
 
-The aic-sdk streaming analysis API is split into a `Collector` and an `Analyzer`. The collector
-accepts mono float32 audio synchronously and is safe to feed from the audio path, while
-`analyze_buffered()` / `analyzeBuffered()` runs an expensive model inference and must execute away
-from that path. The result contains risk, speaker reverb, speaker loudness, interfering speech,
-noise, codec-degradation, and packet-loss scores. `FileAnalyzer` is intended for complete in-memory
-signals and is not appropriate for a live agent stream.
+The Python aic-sdk streaming analysis API is split into a `Collector` and an `Analyzer`; Node 0.25
+combines both roles in one `Analyzer`. Collection accepts mono float32 audio synchronously and is
+safe to feed from the audio path, while `analyze_buffered()` / `analyze()` runs an expensive model
+inference and must execute away from that path. The result contains risk, speaker reverb, speaker
+loudness, interfering speech, noise, codec-degradation, and packet-loss scores. Python's
+`FileAnalyzer` is intended for complete in-memory signals and is not appropriate for a live agent
+stream.
 
 An Analyzer is a side-channel consumer rather than an audio transform. The current workaround is
 a pass-through `FrameProcessor` in RoomIO's single `noise_cancellation` slot.
-`FrameProcessorChain` allows it to run sequentially with the enhancement `Processor`, but this
-still couples observation to the transform path and makes the observation point depend on
-Collector placement. The examples put the Collector before the Processor to capture raw input.
+`FrameProcessorChain` allows it to run sequentially with other processors, but this still couples
+observation to the transform path and makes the observation point depend on Collector placement.
 Making `Analyzer` itself delegate the FrameProcessor interface would permit the minor
-`noise_cancellation=analyzer` shortcut, but would duplicate the collector's public role and would
-not solve composition with `Processor`; keep the explicit collector unless an upstream interface
-makes the ownership model clearer.
+`noise_cancellation=analyzer` shortcut, but would duplicate the collector's public role; keep the
+explicit collector unless an upstream interface makes the ownership model clearer.
 
 The preferred upstream solution is a generic audio observer or tap interface in LiveKit Agents.
 RoomIO or AgentSession should fan frames out to registered observers without allowing observer
@@ -203,29 +200,10 @@ so `window_duration` must remain optional until aic-sdk provides it. If future a
 different context windows, that API will also avoid hard-coding the current five-second window.
 
 Python runs `analyze_buffered()` through `asyncio.to_thread()` because the binding releases the
-GIL during inference. Node aic-sdk 0.23 exposes only synchronous `analyzeBuffered()` and
-`terminateSession()`, so calling them from a timer would still block the agent's JavaScript event
-loop. A production Node integration first needs native asynchronous APIs such as
-`analyzeBufferedAsync()` and `terminateSessionAsync()` that execute on a worker pool.
-
-### First-class Processor metrics
-
-The plugins currently expose Processor health through structured LiveKit logs. This covers events
-that are immediately actionable—initialization and format changes, failures and recovery,
-slower-than-realtime processing, and a lifetime summary—but it does not produce LiveKit metrics.
-
-LiveKit's `FrameProcessor` interface has lifecycle and processing hooks but no metrics event, and
-the Agents metrics model has no `FrameProcessorMetrics` equivalent. Adding private plugin metric
-objects would therefore bypass the normal `AgentSession` collection, `log_metrics()`, usage
-collection, and OpenTelemetry export paths.
-
-A future upstream implementation should let RoomIO or `AgentSession` receive and emit frame
-processor metrics. Useful fields include processed and failed frame counts, input-audio duration,
-total and maximum processing duration, average and maximum real-time factor, maximum accumulated
-processing backlog, initialization count, and the model's fixed audio delay. The fixed audio
-delay describes signal alignment and must remain distinct from processing backlog, which is
-runtime scheduling and compute debt. Once LiveKit provides that surface, these plugins can map the
-same counters used by their structured logs into the standard metrics pipeline.
+GIL during inference. Node calls the synchronous `analyze()` from a timer, which blocks the agent's
+JavaScript event loop during inference. Node aic-sdk 0.25 also offers `analyzeAsync()`, which runs
+on the libuv thread pool; moving to it requires a one-in-flight guard and terminating the session
+only after an in-flight analysis settles.
 
 ### Richer upstream VAD metrics
 
@@ -256,32 +234,30 @@ cd node
 npm ci
 ```
 
-Set `AIC_SDK_LICENSE` before running tests that construct a real SDK Processor or VAD:
+Set `AIC_SDK_LICENSE` before running tests that construct a real SDK VAD or Analyzer:
 
 ```bash
 export AIC_SDK_LICENSE=...
 ```
 
-The integration and end-to-end tests download
-`quail-vf-2.2-s-16khz` and `vad-2.1-xxs-16khz` by default. Override their IDs or cache directory
-with `AIC_INTEGRATION_MODEL_ID`, `AIC_INTEGRATION_VAD_MODEL_ID`, and
-`AIC_INTEGRATION_MODEL_DIR`.
+The integration and end-to-end tests download `vad-2.1-xxs-16khz` and `tyto-1.1-l-16khz` by
+default. Override their IDs or cache directory with `AIC_INTEGRATION_VAD_MODEL_ID`,
+`AIC_INTEGRATION_ANALYSIS_MODEL_ID`, and `AIC_INTEGRATION_MODEL_DIR`.
 
 ## Tests and checks
 
 The test suite has three layers:
 
 1. Unit tests mock the native SDK boundary and require no license or network access.
-2. Integration tests use downloaded models and the real SDK Processor and VAD directly.
+2. Integration tests use downloaded models and the real SDK VAD and Analyzer directly.
 3. End-to-end tests send microphone audio through a real LiveKit room and an `AgentSession`
-   configured with the real Processor and VAD integrations.
+   configured with the real VAD integration.
 
 Run the Python suite and checks with:
 
 ```bash
 cd python
 uv run pytest tests/test_analyzer.py -q
-uv run pytest tests/test_processor.py -q
 uv run pytest tests/test_vad.py -q
 uv run pytest tests/test_integration.py -q
 uv run pytest tests/test_e2e_room.py -q
@@ -313,13 +289,13 @@ synthetic microphone publisher
   -> LiveKit server
   -> agent RoomIO
   -> rtc.AudioStream
-  -> ai-coustics Processor and VAD
+  -> ai-coustics VAD processor
   -> AgentSession
 ```
 
-They verify that RoomIO invokes the real SDK-backed Processor, the `AgentSession` consumes the
-SDK-backed VAD, processing remains successful after the SDK authentication grace period, frame
-geometry is preserved, and RoomIO closes the Processor during session teardown.
+They verify that the `AgentSession` consumes the SDK-backed VAD, VAD inference keeps succeeding
+after the SDK authentication grace period, and RoomIO closes `vad.processor` during session
+teardown.
 
 Start LiveKit in a separate terminal. A native server is the simplest option on macOS; Linux can
 use either the native server or the container:

@@ -8,13 +8,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 import aic_sdk
-import numpy as np
+from livekit import rtc
 from opentelemetry import metrics
 
-from livekit import rtc
-
+from .common import _license_key, _mono_pcm16, _pcm16_to_float32
 from .log import log_fields, logger
-from .processor import _license_key, _pcm16_to_float32
 
 _DEFAULT_ANALYSIS_INTERVAL = 5.0
 _METER = metrics.get_meter("ai-coustics-livekit-extras")
@@ -122,18 +120,7 @@ class Collector(rtc.FrameProcessor[rtc.AudioFrame]):
         if self._closed:
             return
         self._has_buffered_audio = False
-        try:
-            self._reset_analyzer()
-        except Exception as error:
-            logger.error(
-                "Analyzer: reset failed",
-                extra=log_fields(
-                    "analyzer",
-                    error_type=type(error).__name__,
-                    error_message=str(error),
-                ),
-                exc_info=(type(error), error, error.__traceback__),
-            )
+        self._reset_analyzer()
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
         collector = self._collector
@@ -156,20 +143,7 @@ class Collector(rtc.FrameProcessor[rtc.AudioFrame]):
                 )
                 self._format = stream_format
 
-            samples = _pcm16_to_float32(frame.data)
-            expected_samples = frame.samples_per_channel * frame.num_channels
-            if samples.size != expected_samples:
-                raise ValueError(
-                    f"AudioFrame contains {samples.size} samples, expected {expected_samples}"
-                )
-
-            channels = samples.reshape(frame.samples_per_channel, frame.num_channels)
-            mono = (
-                channels[:, 0].copy()
-                if frame.num_channels == 1
-                else channels.mean(axis=1, dtype=np.float32)
-            )
-            collector.buffer(mono)
+            collector.buffer(_pcm16_to_float32(_mono_pcm16(frame).data))
             self._has_buffered_audio = True
         except Exception:
             logger.exception(
@@ -188,9 +162,6 @@ class Collector(rtc.FrameProcessor[rtc.AudioFrame]):
         self._collector = None
 
     def _close(self) -> None:
-        if self._closed:
-            return
-        self._detach()
         self._close_analyzer()
 
 
@@ -224,33 +195,20 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
         except Exception as error:
             raise RuntimeError(f"Failed to create ai-coustics Analyzer: {error}") from error
 
-        self._native_analyzer: aic_sdk.Analyzer | None = native_analyzer
         self._model_id = model_id
         self._analysis_interval = analysis_interval
         self._enable_metrics = enable_metrics
         self._sequence = 0
         self._closed = False
         self._close_event = asyncio.Event()
-        self._close_task: asyncio.Task[None] | None = None
         self.collector = Collector(
             native_collector,
             reset_analyzer=native_analyzer.reset,
             close_analyzer=self._request_close,
         )
-        self._task = loop.create_task(self._analysis_loop(), name="ai-coustics-analyzer")
-
-    async def _terminate_session(self) -> None:
-        native_analyzer = self._native_analyzer
-        self._native_analyzer = None
-        if native_analyzer is None:
-            return
-        try:
-            await asyncio.to_thread(native_analyzer.terminate_session)
-        except Exception:
-            logger.exception(
-                "Analyzer: session termination failed",
-                extra=log_fields("analyzer", model_name=self._model_id),
-            )
+        self._task = loop.create_task(
+            self._analysis_loop(native_analyzer), name="ai-coustics-analyzer"
+        )
 
     async def _analyze_once(self, native_analyzer: aic_sdk.Analyzer) -> None:
         started = time.perf_counter()
@@ -320,11 +278,9 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
                 ),
             )
 
-    async def _analysis_loop(self) -> None:
-        native_analyzer = self._native_analyzer
-        assert native_analyzer is not None
+    async def _analysis_loop(self, native_analyzer: aic_sdk.Analyzer) -> None:
         try:
-            while not self._close_event.is_set():
+            while True:
                 try:
                     await asyncio.wait_for(
                         self._close_event.wait(), timeout=self._analysis_interval
@@ -346,12 +302,7 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
                         ),
                     )
         finally:
-            await self._terminate_session()
-
-    async def _finish_close(self) -> None:
-        await self._task
-        # Keep an idempotent fallback in case the loop exits before entering its try/finally.
-        await self._terminate_session()
+            await asyncio.to_thread(native_analyzer.terminate_session)
 
     def _request_close(self) -> None:
         if self._closed:
@@ -359,13 +310,9 @@ class Analyzer(rtc.EventEmitter[Literal["analysis_result"]]):
         self._closed = True
         self.collector._detach()
         self._close_event.set()
-        self._close_task = asyncio.create_task(
-            self._finish_close(), name="ai-coustics-analyzer-close"
-        )
 
     async def aclose(self) -> None:
         """Stop scheduled analysis and terminate the SDK session."""
 
         self._request_close()
-        assert self._close_task is not None
-        await self._close_task
+        await self._task

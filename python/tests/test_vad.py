@@ -7,9 +7,9 @@ from typing import cast
 import aic_sdk
 import numpy as np
 import pytest
-
 from livekit import agents, rtc
-from livekit.plugins.ai_coustics import VAD, FrameProcessorChain, VADParameters
+
+from ai_coustics.livekit import VAD, FrameProcessorChain, VADParameters
 
 native_calls: list[tuple[str, int | None]] = []
 
@@ -18,6 +18,7 @@ class FakeModel:
     def __init__(self, *, sample_rate: int = 16000, block_size: int = 160) -> None:
         self.sample_rate = sample_rate
         self.block_size = block_size
+        self.queried_sample_rates: list[int] = []
 
     def get_id(self) -> str:
         return "vad-test-model"
@@ -26,6 +27,7 @@ class FakeModel:
         return self.sample_rate
 
     def get_optimal_block_size(self, sample_rate: int) -> int:
+        self.queried_sample_rates.append(sample_rate)
         return round(self.block_size * sample_rate / self.sample_rate)
 
 
@@ -117,11 +119,11 @@ def fake_native_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeVadContext.parameter_errors.clear()
     native_calls.clear()
     monkeypatch.setattr(
-        "livekit.plugins.ai_coustics.vad.aic_sdk.set_sdk_id",
+        "ai_coustics.livekit.vad.aic_sdk.set_sdk_id",
         lambda sdk_id: native_calls.append(("sdk_id", sdk_id)),
     )
     monkeypatch.setattr(
-        "livekit.plugins.ai_coustics.vad.aic_sdk.Vad",
+        "ai_coustics.livekit.vad.aic_sdk.Vad",
         FakeVad,
     )
 
@@ -242,7 +244,7 @@ def test_wraps_native_vad_construction_errors(monkeypatch: pytest.MonkeyPatch) -
     def fail_vad(*_args: object, **_kwargs: object) -> None:
         raise sdk_error
 
-    monkeypatch.setattr("livekit.plugins.ai_coustics.vad.aic_sdk.Vad", fail_vad)
+    monkeypatch.setattr("ai_coustics.livekit.vad.aic_sdk.Vad", fail_vad)
 
     with pytest.raises(RuntimeError, match="Failed to create ai-coustics VAD") as exc_info:
         create_vad()
@@ -428,7 +430,7 @@ async def test_warns_for_sustained_inference_backlog_with_structured_context(
         nonlocal clock
         clock += durations.popleft()
 
-    monkeypatch.setattr("livekit.plugins.ai_coustics.vad.time.perf_counter", perf_counter)
+    monkeypatch.setattr("ai_coustics.livekit.vad.time.perf_counter", perf_counter)
     vad = create_vad(model=FakeModel(sample_rate=100, block_size=10))
     stream = vad.stream()
     native = FakeVad.instances[0]
@@ -436,7 +438,7 @@ async def test_warns_for_sustained_inference_backlog_with_structured_context(
     native.predictions.extend([(0.0, False)] * 3)
 
     push_processed(vad, stream, make_frame(np.arange(30, dtype=np.int16), sample_rate=100))
-    with caplog.at_level("WARNING", logger="livekit.plugins.ai_coustics"):
+    with caplog.at_level("WARNING", logger="ai_coustics.livekit"):
         await collect_events(stream)
 
     warnings = [
@@ -557,6 +559,25 @@ async def test_uses_input_sample_rate_without_plugin_resampling() -> None:
     )
 
 
+def test_reinitializes_only_when_the_input_sample_rate_changes() -> None:
+    model = FakeModel(block_size=4)
+    vad = create_vad(model=model)
+    native = FakeVad.instances[0]
+    model.queried_sample_rates.clear()
+
+    for samples, sample_rate in ((3, 16000), (7, 16000), (2, 16000), (12, 48000), (12, 48000)):
+        vad.processor._process(
+            make_frame(np.zeros(samples, dtype=np.int16), sample_rate=sample_rate)
+        )
+
+    assert model.queried_sample_rates == [16000, 48000]
+    assert [(config.sample_rate, config.block_size) for config in native.initialized_configs] == [
+        (16000, 4),
+        (48000, 12),
+    ]
+    assert [block.size for block in native.blocks] == [4, 4, 4, 12, 12]
+
+
 @pytest.mark.asyncio
 async def test_flush_resets_stream_state_without_repeating_shared_inference() -> None:
     vad = create_vad(model=FakeModel(block_size=4))
@@ -644,7 +665,7 @@ async def test_missing_metadata_log_uses_standard_vad_context(
 
 
 @pytest.mark.asyncio
-async def test_processor_chain_runs_vad_before_audio_replacement() -> None:
+async def test_vad_audio_survives_downstream_audio_replacement() -> None:
     class MutingProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         enabled = True
 

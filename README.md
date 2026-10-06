@@ -4,11 +4,10 @@ This repository contains the ai-coustics-maintained Python and Node.js integrati
 [LiveKit Agents](https://docs.livekit.io/agents/). They are thin wrappers around the public
 ai-coustics SDKs and let LiveKit agents use:
 
-- `Processor` for speech enhancement through LiveKit's audio `FrameProcessor` interface.
-- `FrameProcessorChain` for applying any number of frame processors in sequence.
-- `VAD` for shared voice-activity inference through `vad.processor` and LiveKit's streaming VAD
-  interface.
+- `VAD` for voice activity detection with a dedicated SDK VAD model, through `vad.processor` and
+  LiveKit's streaming VAD interface.
 - `Analyzer` for periodic audio-quality analysis.
+- `FrameProcessorChain` for applying any number of frame processors in sequence.
 
 Applications choose and provision the SDK models themselves. This keeps model selection, storage,
 and deployment under application control while the plugins handle LiveKit audio formats, stream
@@ -33,15 +32,14 @@ lifecycle, observability, and error recovery.
 | Python | `ai-coustics-livekit-extras` | [Installation and usage](python/README.md) |
 | Node.js | `@ai-coustics/livekit-extras` | [Installation and usage](node/README.md) |
 
-The runtime guides cover migration from the official plugins, model provisioning, AgentSession
-integration, Processor enhancement settings, VAD parameters, authentication, and operational
-constraints.
+The runtime guides cover model provisioning, AgentSession integration, VAD parameters, audio
+analysis, authentication, and operational constraints.
 
-> These packages are alternatives to LiveKit's official
+> These packages are separate from LiveKit's official
 > [`livekit-plugins-ai-coustics`](https://pypi.org/project/livekit-plugins-ai-coustics/) and
 > [`@livekit/plugins-ai-coustics`](https://www.npmjs.com/package/@livekit/plugins-ai-coustics)
-> packages, not extensions of them. If you choose to migrate, uninstall the official packages for
-> your runtime and do not mix objects from the two implementations.
+> packages and can be installed alongside them. Speech enhancement is provided by the official
+> plugins.
 
 ## Repository contents
 

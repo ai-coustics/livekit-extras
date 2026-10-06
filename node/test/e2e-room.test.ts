@@ -21,13 +21,12 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { FrameProcessorChain, Model, Processor, VAD } from "../src/index.js";
+import { Model, VAD, type VADOptions } from "../src/index.js";
 
 const describeIf = process.env.AIC_SDK_LICENSE ? describe : describe.skip;
 const livekitUrl = process.env.LIVEKIT_URL ?? "ws://127.0.0.1:7880";
 const livekitApiKey = process.env.LIVEKIT_API_KEY ?? "devkey";
 const livekitApiSecret = process.env.LIVEKIT_API_SECRET ?? "secret";
-const modelId = process.env.AIC_INTEGRATION_MODEL_ID ?? "quail-vf-2.2-s-16khz";
 const vadModelId =
   process.env.AIC_INTEGRATION_VAD_MODEL_ID ?? "vad-2.1-xxs-16khz";
 const modelDir =
@@ -41,42 +40,19 @@ const licenseGracePeriodMs = 10_000;
 
 initializeLogger({ pretty: false, level: "error" });
 
-type FrameFormat = {
-  sampleRate: number;
-  channels: number;
-  samplesPerChannel: number;
-};
-
-class ObservedProcessor extends Processor {
-  readonly createdAt = Date.now();
-  calls = 0;
-  successTimes: number[] = [];
-  formats: FrameFormat[] = [];
-  closed = false;
-
-  override process(frame: AudioFrame): AudioFrame {
-    this.calls += 1;
-    this.formats.push({
-      sampleRate: frame.sampleRate,
-      channels: frame.channels,
-      samplesPerChannel: frame.samplesPerChannel,
-    });
-    const output = super.process(frame);
-    // Processor returns the original frame when it catches an SDK error and fails open.
-    if (output !== frame) {
-      this.successTimes.push(Date.now());
-    }
-    return output;
-  }
-
-  override close(): void {
-    this.closed = true;
-    super.close();
-  }
-}
-
 class ObservedVAD extends VAD {
-  inferenceEvents = 0;
+  readonly createdAt = Date.now();
+  inferenceTimes: number[] = [];
+  processorClosed = false;
+
+  constructor(options: VADOptions) {
+    super(options);
+    const close = this.processor.close.bind(this.processor);
+    this.processor.close = () => {
+      this.processorClosed = true;
+      close();
+    };
+  }
 
   override stream(): VADStream {
     const stream = super.stream();
@@ -84,7 +60,7 @@ class ObservedVAD extends VAD {
     stream.next = async () => {
       const result = await next();
       if (!result.done && result.value.type === VADEventType.INFERENCE_DONE) {
-        this.inferenceEvents += 1;
+        this.inferenceTimes.push(Date.now());
       }
       return result;
     };
@@ -172,22 +148,20 @@ afterAll(async () => {
   await dispose();
 });
 
-describeIf("Processor and VAD in a real AgentSession room", () => {
+describeIf("VAD in a real AgentSession room", () => {
   it(
-    "processes microphone audio and consumes VAD events after the license grace period",
+    "consumes VAD events after the license grace period",
     async () => {
       fs.mkdirSync(modelDir, { recursive: true });
-      const model = Model.fromFile(Model.download(modelId, modelDir));
-      const vadModel = Model.fromFile(Model.download(vadModelId, modelDir));
-      const processor = new ObservedProcessor({ model });
+      const vadModel = Model.fromFile(await Model.download(vadModelId, modelDir));
       const detector = new ObservedVAD({ model: vadModel });
-      const frameProcessor = new FrameProcessorChain(detector.processor, processor);
       const roomName = `ai-coustics-e2e-${randomUUID()}`;
       let agentRoom: Room | undefined;
       let publisherRoom: Room | undefined;
       let source: AudioSource | undefined;
       let session: voice.AgentSession | undefined;
       let sessionStarted = false;
+      let processorClosedByRoomIO = false;
 
       try {
         agentRoom = await connectRoom({
@@ -210,7 +184,7 @@ describeIf("Processor and VAD in a real AgentSession room", () => {
             audioSampleRate: inputSampleRate,
             audioNumChannels: 1,
             participantIdentity: "publisher",
-            noiseCancellation: frameProcessor,
+            noiseCancellation: detector.processor,
             textEnabled: false,
             videoEnabled: false,
           },
@@ -229,37 +203,29 @@ describeIf("Processor and VAD in a real AgentSession room", () => {
 
         // Continue beyond the SDK's authentication grace period, while guaranteeing at least
         // three seconds of actual room audio if room setup itself took unusually long.
-        const streamUntil = Math.max(Date.now() + 3_000, processor.createdAt + 12_000);
+        const streamUntil = Math.max(Date.now() + 3_000, detector.createdAt + 12_000);
         await publishTestSignal(source, streamUntil);
 
-        expect(processor.calls).toBeGreaterThanOrEqual(20);
-        expect(processor.formats.length).toBe(processor.calls);
+        expect(detector.inferenceTimes.length).toBeGreaterThan(0);
         expect(
-          processor.formats.every(
-            ({ sampleRate, channels, samplesPerChannel }) =>
-              sampleRate === inputSampleRate && channels === 1 && samplesPerChannel > 0,
+          detector.inferenceTimes.some(
+            (inferredAt) => inferredAt >= detector.createdAt + licenseGracePeriodMs,
           ),
         ).toBe(true);
-        expect(processor.successTimes.length).toBeGreaterThan(0);
-        expect(
-          processor.successTimes.some(
-            (processedAt) => processedAt >= processor.createdAt + licenseGracePeriodMs,
-          ),
-        ).toBe(true);
-        expect(detector.inferenceEvents).toBeGreaterThan(0);
       } finally {
         if (sessionStarted) {
           await session!.close();
         } else {
-          processor.close();
+          detector.processor.close();
         }
+        processorClosedByRoomIO = detector.processorClosed;
         await source?.close();
         await publisherRoom?.disconnect();
         await agentRoom?.disconnect();
         await detector.close();
       }
 
-      expect(processor.closed).toBe(true);
+      expect(processorClosedByRoomIO).toBe(true);
     },
     45_000,
   );

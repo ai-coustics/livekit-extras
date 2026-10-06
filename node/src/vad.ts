@@ -4,21 +4,20 @@ import {
   VADEventType,
 } from "@livekit/agents";
 import {
+  type Model,
+  Vad as AicVad,
+  type VadContext,
+  VadParameter as AicVadParameter,
+  _setSdkId as setSdkId,
+} from "@ai-coustics/aic-sdk";
+import {
   AudioFrame,
   FrameProcessor,
   type FrameProcessorStreamInfo,
 } from "@livekit/rtc-node";
 
+import { errorDetail, monoPcm16, pcm16ToFloat32, resolveLicenseKey } from "./common.js";
 import { writeLog } from "./log.js";
-import { pcm16ToFloat32 } from "./processor.js";
-import {
-  type Model,
-  Vad as AicVad,
-  type VadContext,
-  type VadInstance,
-  VadParameter as AicVadParameter,
-  setSdkId,
-} from "./sdk.js";
 
 const FRAME_USERDATA_VAD_ATTRIBUTE = "ai_coustics.vad";
 const DEFAULT_SPEECH_HOLD_DURATION_SECONDS = 0.25;
@@ -55,36 +54,17 @@ interface InferenceResult {
   predictionDelaySamples: number;
 }
 
-interface InferenceError {
-  message: string;
-  cause: unknown;
-}
-
 interface FrameMetadata {
   results: readonly InferenceResult[];
-  error?: InferenceError;
-}
-
-function resolveLicenseKey(value?: string): string {
-  const key = value || process.env.AIC_SDK_LICENSE;
-  if (!key) {
-    throw new Error(
-      "An ai-coustics SDK license is required. Pass licenseKey or set AIC_SDK_LICENSE.",
-    );
-  }
-  return key;
-}
-
-function errorDetail(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  error?: unknown;
 }
 
 /** Pass-through processor that runs one SDK VAD and annotates input frames. */
 export class VADProcessor extends FrameProcessor<AudioFrame> {
   private readonly model: Model;
   private readonly modelId: string;
-  private nativeVad: VadInstance | null;
-  private context: VadContext | null;
+  private readonly nativeVad: AicVad;
+  private readonly context: VadContext;
   private processorEnabled = true;
   private closed = false;
   private format: [number, number] | null = null;
@@ -98,7 +78,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
   constructor(model: Model, licenseKey: string) {
     super();
     setSdkId(9);
-    let nativeVad: VadInstance;
+    let nativeVad: AicVad;
     try {
       nativeVad = new AicVad(model, licenseKey);
     } catch (error) {
@@ -113,7 +93,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
   }
 
   get sdkContext(): VadContext {
-    if (!this.context) {
+    if (this.closed) {
       throw new Error("Cannot get context from a closed ai-coustics VAD processor");
     }
     return this.context;
@@ -147,23 +127,20 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
   }
 
   process(frame: AudioFrame): AudioFrame {
-    if (!this.processorEnabled || !this.nativeVad || !this.context) return frame;
+    if (!this.processorEnabled) return frame;
 
     let metadata: FrameMetadata;
     try {
       metadata = { results: this.processFrame(frame) };
     } catch (error) {
-      metadata = {
-        results: [],
-        error: { message: errorDetail(error), cause: error },
-      };
+      metadata = { results: [], error };
     }
     frame.userdata[FRAME_USERDATA_VAD_ATTRIBUTE] = metadata;
     return frame;
   }
 
   reset(): void {
-    this.context?.reset();
+    if (!this.closed) this.context.reset();
     this.format = null;
     this.inferenceBuffer = new Int16Array(0);
     this.predictionDelaySamples = 0;
@@ -175,59 +152,18 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
     if (this.closed) return;
     this.closed = true;
     this.processorEnabled = false;
-    const nativeVad = this.nativeVad;
-    this.nativeVad = null;
-    this.context = null;
     this.inferenceBuffer = new Int16Array(0);
-    if (nativeVad) {
-      try {
-        nativeVad.terminateSession();
-      } catch (error) {
-        writeLog(
-          "error",
-          "vad",
-          "session termination failed",
-          this.diagnosticFields({
-            errorType: error instanceof Error ? error.name : typeof error,
-            errorMessage: errorDetail(error),
-          }),
-          error,
-        );
-      }
-    }
+    this.nativeVad.terminateSession();
   }
 
   private processFrame(frame: AudioFrame): readonly InferenceResult[] {
     const nativeVad = this.nativeVad;
     const context = this.context;
-    if (!nativeVad || !context) return [];
+    const mono = monoPcm16(frame);
 
-    const expectedSamples = frame.samplesPerChannel * frame.channels;
-    if (frame.data.length !== expectedSamples) {
-      throw new Error(
-        `AudioFrame contains ${frame.data.length} samples, expected ${expectedSamples}`,
-      );
-    }
-    const mono = new Int16Array(frame.samplesPerChannel);
-    if (frame.channels === 1) {
-      mono.set(frame.data);
-    } else {
-      for (let sample = 0; sample < frame.samplesPerChannel; sample += 1) {
-        let sum = 0;
-        for (let channel = 0; channel < frame.channels; channel += 1) {
-          sum += frame.data[sample * frame.channels + channel]!;
-        }
-        mono[sample] = Math.round(sum / frame.channels);
-      }
-    }
-
-    const inferenceBlockSize = this.model.getOptimalBlockSize(frame.sampleRate);
-    const nextFormat: [number, number] = [frame.sampleRate, inferenceBlockSize];
-    if (
-      !this.format ||
-      this.format[0] !== nextFormat[0] ||
-      this.format[1] !== nextFormat[1]
-    ) {
+    let inferenceBlockSize: number;
+    if (!this.format || this.format[0] !== frame.sampleRate) {
+      inferenceBlockSize = this.model.getOptimalBlockSize(frame.sampleRate);
       try {
         nativeVad.initialize(frame.sampleRate, inferenceBlockSize, false);
       } catch (error) {
@@ -238,9 +174,11 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
           { cause: error },
         );
       }
-      this.format = nextFormat;
+      this.format = [frame.sampleRate, inferenceBlockSize];
       this.inferenceBuffer = new Int16Array(0);
       this.predictionDelaySamples = context.getPredictionDelay();
+    } else {
+      inferenceBlockSize = this.format[1];
     }
 
     const buffered = new Int16Array(this.inferenceBuffer.length + mono.length);
@@ -273,7 +211,7 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
       results.push({
         pcm,
         sampleRate: frame.sampleRate,
-        probability: context.rawVadProbability(),
+        probability: context.getRawVadProbability(),
         detected: context.isSpeechDetected(),
         sensitivity: context.getParameter(AicVadParameter.Sensitivity),
         speechHoldDuration: context.getParameter(
@@ -638,8 +576,7 @@ class AicVADStream extends LiveKitVADStream {
           writeLog(
             "error",
             "vad",
-            "no inference metadata found; pass vad.processor as RoomIO " +
-              "noiseCancellation (or place it first in FrameProcessorChain)",
+            "no inference metadata found; pass vad.processor as RoomIO noiseCancellation",
             this.processor.diagnosticFields({
               missingMetadataFrames: this.missingMetadataFrames,
             }),
@@ -648,8 +585,8 @@ class AicVADStream extends LiveKitVADStream {
         continue;
       }
       this.missingMetadataFrames = 0;
-      if (metadata.error) {
-        throw new Error(metadata.error.message, { cause: metadata.error.cause });
+      if (metadata.error !== undefined) {
+        throw new Error(errorDetail(metadata.error), { cause: metadata.error });
       }
 
       for (const result of metadata.results) {

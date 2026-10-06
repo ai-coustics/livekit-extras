@@ -8,14 +8,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from livekit import agents, rtc
-from livekit.plugins import ai_coustics
+
+from ai_coustics import livekit as ai_coustics
 
 pytestmark = pytest.mark.integration
 
 LICENSE = os.getenv("AIC_SDK_LICENSE")
-MODEL_ID = os.getenv("AIC_INTEGRATION_MODEL_ID", "quail-vf-2.2-s-16khz")
 VAD_MODEL_ID = os.getenv("AIC_INTEGRATION_VAD_MODEL_ID", "vad-2.1-xxs-16khz")
 ANALYSIS_MODEL_ID = os.getenv("AIC_INTEGRATION_ANALYSIS_MODEL_ID", "tyto-1.1-l-16khz")
 MODEL_DIR = Path(os.getenv("AIC_INTEGRATION_MODEL_DIR", "~/.cache/aic-sdk/models")).expanduser()
@@ -32,7 +31,6 @@ def _recorded_speech_fixture() -> np.ndarray:
 def _frame(
     index: int,
     *,
-    channels: int = 1,
     data: np.ndarray | None = None,
 ) -> rtc.AudioFrame:
     if data is None:
@@ -44,20 +42,12 @@ def _frame(
         mono = np.clip((voice + noise) * 32768, -32768, 32767).astype(np.int16)
     else:
         mono = data
-    data = np.repeat(mono, channels) if channels > 1 else mono
     return rtc.AudioFrame(
-        data=data.tobytes(),
+        data=mono.tobytes(),
         sample_rate=SAMPLE_RATE,
-        num_channels=channels,
+        num_channels=1,
         samples_per_channel=SAMPLES_PER_FRAME,
     )
-
-
-@pytest.fixture(scope="module")
-def model() -> ai_coustics.Model:
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = ai_coustics.Model.download(MODEL_ID, MODEL_DIR)
-    return ai_coustics.Model.from_file(model_path)
 
 
 @pytest.fixture(scope="module")
@@ -72,38 +62,6 @@ def analysis_model() -> ai_coustics.Model:
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     model_path = ai_coustics.Model.download(ANALYSIS_MODEL_ID, MODEL_DIR)
     return ai_coustics.Model.from_file(model_path)
-
-
-@pytest.mark.skipif(not LICENSE, reason="AIC_SDK_LICENSE is required")
-def test_real_processor_with_downloaded_model_and_fifty_ms_frames(
-    model: ai_coustics.Model,
-) -> None:
-    enhancer = ai_coustics.Processor(model=model)
-    outputs = [enhancer._process(_frame(index)) for index in range(40)]
-
-    assert all(output.samples_per_channel == SAMPLES_PER_FRAME for output in outputs)
-    assert all(output.sample_rate == SAMPLE_RATE for output in outputs)
-    inputs = np.concatenate(
-        [np.frombuffer(_frame(index).data, dtype=np.int16) for index in range(20, 40)]
-    )
-    enhanced = np.concatenate(
-        [np.frombuffer(output.data, dtype=np.int16) for output in outputs[20:]]
-    )
-    assert not np.array_equal(enhanced, inputs)
-
-
-@pytest.mark.skipif(not LICENSE, reason="AIC_SDK_LICENSE is required")
-def test_real_processor_stereo_and_runtime_parameters(model: ai_coustics.Model) -> None:
-    enhancer = ai_coustics.Processor(model=model)
-    context = enhancer.get_context()
-    context.set_parameter(ai_coustics.ProcessorParameter.Bypass, 1.0)
-    output = enhancer._process(_frame(0, channels=2))
-    context.set_parameter(ai_coustics.ProcessorParameter.Bypass, 0.0)
-
-    assert output.num_channels == 2
-    assert output.samples_per_channel == SAMPLES_PER_FRAME
-    channels = np.frombuffer(output.data, dtype=np.int16).reshape(SAMPLES_PER_FRAME, 2)
-    assert np.array_equal(channels[:, 0], channels[:, 1])
 
 
 @pytest.mark.skipif(not LICENSE, reason="AIC_SDK_LICENSE is required")
