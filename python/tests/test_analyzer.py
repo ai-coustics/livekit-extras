@@ -53,7 +53,6 @@ class FakeNativeAnalyzer:
         self.terminate_calls = 0
         self.result = FakeResult()
         self.error: Exception | None = None
-        self.reset_error: Exception | None = None
 
     def analyze_buffered(self) -> FakeResult:
         self.analyze_calls += 1
@@ -63,8 +62,6 @@ class FakeNativeAnalyzer:
 
     def reset(self) -> None:
         self.reset_calls += 1
-        if self.reset_error is not None:
-            raise self.reset_error
 
     def terminate_session(self) -> None:
         self.terminate_calls += 1
@@ -93,16 +90,11 @@ def fake_sdk(
 class FakeInstrument:
     def __init__(self) -> None:
         self.measurements: list[tuple[float, dict[str, str]]] = []
-        self.error: Exception | None = None
 
     def add(self, value: float, *, attributes: dict[str, str]) -> None:
-        if self.error is not None:
-            raise self.error
         self.measurements.append((value, attributes))
 
     def record(self, value: float, *, attributes: dict[str, str]) -> None:
-        if self.error is not None:
-            raise self.error
         self.measurements.append((value, attributes))
 
 
@@ -442,32 +434,6 @@ async def test_stream_info_hooks_defer_reset_until_in_flight_analysis_returns(
 
 
 @pytest.mark.asyncio
-async def test_failed_reset_is_logged_and_does_not_escape_stream_info_hooks(
-    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    _, native_analyzer, _ = fake_sdk
-    native_analyzer.reset_error = RuntimeError("reset failed")
-    analyzer = Analyzer(
-        model=cast(aic_sdk.Model, FakeModel()),
-        license_key="test-license",
-        analysis_interval=60.0,
-    )
-
-    with caplog.at_level(logging.ERROR, logger="ai_coustics.livekit"):
-        analyzer.collector._on_stream_info_updated(
-            room_name="test-room",
-            participant_identity="test-participant",
-            publication_sid="TR_test",
-        )
-        analyzer.collector._on_stream_info_cleared()
-    await analyzer.aclose()
-
-    assert native_analyzer.reset_calls == 2
-    assert any(record.message == "Collector: reset failed" for record in caplog.records)
-
-
-@pytest.mark.asyncio
 async def test_reinitializes_collector_when_frame_format_changes(
     fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
 ) -> None:
@@ -561,30 +527,6 @@ async def test_throwing_listener_does_not_stop_analysis(
     assert any(
         record.message == "Analyzer: result event emission failed" for record in caplog.records
     )
-
-
-@pytest.mark.asyncio
-async def test_metrics_failure_is_logged_and_event_still_emitted(
-    fake_sdk: tuple[FakeCollector, FakeNativeAnalyzer, list[int]],
-    caplog: pytest.LogCaptureFixture,
-    metric_instruments: dict[str, FakeInstrument],
-) -> None:
-    metric_instruments["analysis"].error = RuntimeError("metrics failed")
-    analyzer = Analyzer(
-        model=cast(aic_sdk.Model, FakeModel()),
-        license_key="test-license",
-        analysis_interval=0.01,
-    )
-    events: list[AnalysisEvent] = []
-    analyzer.on("analysis_result", events.append)
-    analyzer.collector._process(make_frame())
-
-    with caplog.at_level(logging.ERROR, logger="ai_coustics.livekit"):
-        await wait_until(lambda: bool(events))
-    await analyzer.aclose()
-
-    assert any(record.message == "Analyzer: metrics recording failed" for record in caplog.records)
-    assert events[0].sequence == 1
 
 
 @pytest.mark.asyncio

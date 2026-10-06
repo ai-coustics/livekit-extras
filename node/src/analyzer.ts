@@ -157,6 +157,8 @@ export class Collector extends FrameProcessor<AudioFrame> {
   private reset(): void {
     if (this.closed) return;
     this.hasBufferedAudio = false;
+    // The SDK reset fails only after dispose(). This wrapper never calls dispose(), so a handler
+    // is not necessary.
     this.resetAnalyzer();
   }
 
@@ -290,26 +292,18 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
   ): void {
     if (!this.enableMetrics) return;
 
-    try {
-      const attributes = { ...metricBaseAttributes, status };
-      analysisCount.add(1, attributes);
-      inferenceDuration.record(inferenceDurationMs / 1000, attributes);
-      if (result) {
-        for (const [scoreName, property] of resultFields) {
-          score.record(result[property], {
-            ...metricBaseAttributes,
-            "score.name": scoreName,
-          });
-        }
+    // The OpenTelemetry API specification does not let instrument calls throw. A handler is not
+    // necessary.
+    const attributes = { ...metricBaseAttributes, status };
+    analysisCount.add(1, attributes);
+    inferenceDuration.record(inferenceDurationMs / 1000, attributes);
+    if (result) {
+      for (const [scoreName, property] of resultFields) {
+        score.record(result[property], {
+          ...metricBaseAttributes,
+          "score.name": scoreName,
+        });
       }
-    } catch (error) {
-      writeLog(
-        "error",
-        "analyzer",
-        "metrics recording failed",
-        { modelName: this.modelId, status },
-        error,
-      );
     }
   }
 
@@ -325,19 +319,7 @@ export class Analyzer extends (EventEmitter as new () => TypedEmitter<AnalyzerCa
       return;
     }
     // terminateSession() waits for the native lock, so a call during an analysis blocks the
-    // event loop.
-    void this.pendingAnalysis.then(() => {
-      try {
-        analyzer?.terminateSession();
-      } catch (error) {
-        writeLog(
-          "error",
-          "analyzer",
-          "session termination failed",
-          { modelName: this.modelId },
-          error,
-        );
-      }
-    });
+    // event loop. It fails only after dispose(), so the promise does not reject.
+    void this.pendingAnalysis.then(() => analyzer?.terminateSession());
   }
 }
