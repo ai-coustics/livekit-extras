@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents when working with code in this repository.
 
 ## Repository shape
 
@@ -15,11 +15,6 @@ Both SDK versions are built on ai-coustics core 0.25.0.
 
 Run all commands from inside `python/` or `node/`; there is no root-level build. The two packages
 are released in lockstep and must always carry the same version.
-
-`DEVELOPMENT.md` is the authoritative long-form document for architecture rationale, the logging
-convention, the local end-to-end environment, release steps, and the planned upstream LiveKit
-integrations (`download-files`, an audio observer/tap interface, VAD metrics).
-Read it before changing public behavior; update it when that rationale changes.
 
 ## Commands
 
@@ -102,7 +97,7 @@ tests. The file layouts intentionally correspond one-to-one. VAD event semantics
 `testdata/vad_scenarios.json`, which both unit suites replay; change that file, not per-runtime
 assertions.
 
-**Logging** (full rules in `DEVELOPMENT.md`). Messages are `Component: event`
+**Logging**. Messages are `Component: event`
 (`VAD: inference falling behind realtime`). Every record carries `plugin=ai-coustics` and
 `component=vad|analyzer|collector`. Put changing values in structured fields, never in the message
 string. Python: `ai_coustics.livekit` logger, `extra=`, snake_case fields, durations in seconds.
