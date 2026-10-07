@@ -46,8 +46,6 @@ analysis, authentication, and operational constraints.
 
 - [`python/`](python/) contains the Python package and its tests.
 - [`node/`](node/) contains the Node.js package and its tests.
-- [`DEVELOPMENT.md`](DEVELOPMENT.md) documents architecture, local setup, test commands, and
-  planned upstream integrations.
 
 For SDK parameter behavior, supported models, and model-specific limits, see the
 [ai-coustics SDK documentation](https://docs.ai-coustics.com/).
