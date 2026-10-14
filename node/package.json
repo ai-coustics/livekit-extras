@@ -45,7 +45,7 @@
   },
   "peerDependencies": {
     "@livekit/agents": ">=1.0.43 <2",
-    "@livekit/rtc-node": ">=0.13.24 <1"
+    "@livekit/rtc-node": "^0.13.24 || ^1.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
