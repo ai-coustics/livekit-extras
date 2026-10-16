@@ -208,17 +208,15 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
         this.failedBlocks += 1;
         const failed = performance.now();
         if (failed - this.lastInferenceErrorLog >= INFERENCE_ERROR_LOG_INTERVAL_MS) {
-          writeLog(
-            "error",
-            "vad",
-            "inference failed; treating the block as silence",
-            this.diagnosticFields({
-              errorType: error instanceof Error ? error.name : typeof error,
-              errorMessage: errorDetail(error),
-              failedBlocks: this.failedBlocks,
-            }),
-            error,
-          );
+          const fields = this.diagnosticFields({
+            errorType: error instanceof Error ? error.name : typeof error,
+            errorMessage: errorDetail(error),
+            failedBlocks: this.failedBlocks,
+          });
+          // These records can repeat for the full session. Do not keep user data in them.
+          delete fields.participantIdentity;
+          delete fields.roomName;
+          writeLog("error", "vad", "inference failed; treating the block as silence", fields, error);
           this.lastInferenceErrorLog = failed;
           this.failedBlocks = 0;
         }

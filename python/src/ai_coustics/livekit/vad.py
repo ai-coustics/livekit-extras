@@ -188,13 +188,17 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 self._failed_blocks += 1
                 failed = time.perf_counter()
                 if failed - self._last_inference_error_log >= _INFERENCE_ERROR_LOG_INTERVAL:
+                    fields = self._diagnostic_fields(
+                        error_type=type(error).__name__,
+                        error_message=str(error),
+                        failed_blocks=self._failed_blocks,
+                    )
+                    # These records can repeat for the full session. Do not keep user data in them.
+                    fields.pop("participant_identity", None)
+                    fields.pop("room_name", None)
                     logger.error(
                         "VAD: inference failed; treating the block as silence",
-                        extra=self._diagnostic_fields(
-                            error_type=type(error).__name__,
-                            error_message=str(error),
-                            failed_blocks=self._failed_blocks,
-                        ),
+                        extra=fields,
                         exc_info=(type(error), error, error.__traceback__),
                     )
                     self._last_inference_error_log = failed
