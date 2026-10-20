@@ -106,6 +106,8 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         self._prediction_delay_samples = 0
         self._processing_backlog = 0.0
         self._slow_warning_active = False
+        self._failed_blocks = 0
+        self._last_inference_error_log = -math.inf
 
     def _on_stream_info_updated(
         self,

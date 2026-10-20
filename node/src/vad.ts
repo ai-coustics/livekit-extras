@@ -149,6 +149,8 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
     this.predictionDelaySamples = 0;
     this.processingBacklogMs = 0;
     this.slowWarningActive = false;
+    this.failedBlocks = 0;
+    this.lastInferenceErrorLog = -Infinity;
   }
 
   close(): void {
