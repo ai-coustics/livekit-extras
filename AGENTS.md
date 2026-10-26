@@ -11,7 +11,7 @@ Two independently built packages that are functional mirrors of each other:
   built on `aic-sdk` 3.3.
 - `node/` — `@ai-coustics/livekit-extras` (`node/src/`), built on `@ai-coustics/aic-sdk` 0.25.
 
-Both SDK versions are built on ai-coustics core 0.25.1.
+Both SDK versions are built on ai-coustics core 0.25.2.
 
 Run all commands from inside `python/` or `node/`; there is no root-level build. The two packages
 are released in lockstep and must always carry the same version.
