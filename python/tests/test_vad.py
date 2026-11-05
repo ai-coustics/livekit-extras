@@ -86,7 +86,7 @@ class FakeVad:
         self.license_key = license_key
         self.config = config
         self.context = FakeVadContext()
-        self.predictions: deque[tuple[float, bool]] = deque()
+        self.predictions: deque[tuple[float, bool] | None] = deque()
         self.blocks: list[np.ndarray] = []
         self.initialized_configs: list[aic_sdk.ProcessorConfig] = []
         self.terminate_calls = 0
@@ -112,7 +112,10 @@ class FakeVad:
         if self.process_error is not None:
             raise self.process_error
         if self.predictions:
-            self.context.probability, self.context.detected = self.predictions.popleft()
+            prediction = self.predictions.popleft()
+            if prediction is None:
+                raise RuntimeError("injected inference failure")
+            self.context.probability, self.context.detected = prediction
 
     def terminate_session(self) -> None:
         self.terminate_calls += 1
@@ -278,7 +281,9 @@ async def test_replays_shared_vad_scenario(
     stream = vad.stream()
     native = FakeVad.instances[0]
     native.context.prediction_delay_samples = scenario["prediction_delay_samples"]
-    native.predictions.extend(tuple(prediction) for prediction in scenario["predictions"])
+    native.predictions.extend(
+        None if prediction is None else tuple(prediction) for prediction in scenario["predictions"]
+    )
 
     ramp = np.arange(sum(step.get("samples", 0) for step in scenario["inputs"]), dtype=np.int16)
     offset = 0
@@ -370,37 +375,48 @@ async def test_warns_for_sustained_inference_backlog_with_structured_context(
 
 
 @pytest.mark.asyncio
-async def test_inference_error_includes_model_and_audio_format(
+async def test_inference_errors_log_with_a_rate_limit_and_keep_the_stream_running(
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    clock = 100.0
+    monkeypatch.setattr("ai_coustics.livekit.vad.time.perf_counter", lambda: clock)
     vad = create_vad(model=FakeModel(sample_rate=48000, block_size=480))
     stream = vad.stream()
     native = FakeVad.instances[0]
-    sdk_error = ValueError("native failure")
-    native.process_error = sdk_error
+    native.process_error = ValueError("native failure")
 
+    push_processed(vad, stream, make_frame(np.arange(1440, dtype=np.int16), sample_rate=48000))
+    clock += 10.0
     push_processed(vad, stream, make_frame(np.arange(480, dtype=np.int16), sample_rate=48000))
+    native.process_error = None
+    native.predictions.append((0.9, True))
+    push_processed(vad, stream, make_frame(np.arange(480, dtype=np.int16), sample_rate=48000))
+    events = await collect_events(stream)
 
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            r"ai-coustics VAD inference failed "
-            r"\(model=vad-test-model, sample_rate=48000, block_size=480\): native failure"
-        ),
-    ) as exc_info:
-        await collect_events(stream)
-
-    assert exc_info.value.__cause__ is sdk_error
+    assert [event.probability for event in events if event.type.value == "inference_done"] == [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.9,
+    ]
     assert native.terminate_calls == 0
-    failure = next(record for record in caplog.records if record.message == "VAD: stream failed")
+    failures = [
+        record
+        for record in caplog.records
+        if record.message == "VAD: inference failed; treating the block as silence"
+    ]
+    assert [failure.failed_blocks for failure in failures] == [1, 3]  # type: ignore[attr-defined]
+    failure = failures[0]
     assert failure.plugin == "ai-coustics"  # type: ignore[attr-defined]
     assert failure.component == "vad"  # type: ignore[attr-defined]
     assert failure.model_provider == "ai-coustics"  # type: ignore[attr-defined]
     assert failure.model_name == "vad-test-model"  # type: ignore[attr-defined]
     assert failure.sample_rate == 48000  # type: ignore[attr-defined]
     assert failure.block_size == 480  # type: ignore[attr-defined]
-    assert failure.error_type == "RuntimeError"  # type: ignore[attr-defined]
-    assert failure.error_message.endswith("native failure")  # type: ignore[attr-defined]
+    assert failure.error_type == "ValueError"  # type: ignore[attr-defined]
+    assert failure.error_message == "native failure"  # type: ignore[attr-defined]
     assert failure.exc_info is not None
 
 

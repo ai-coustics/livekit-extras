@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from .log import log_fields, logger
 _FRAME_USERDATA_VAD_ATTRIBUTE = "ai_coustics.vad"
 _SLOW_WARNING_INTERVAL = 10.0
 _SLOW_INFERENCE_BACKLOG_THRESHOLD = 0.2
+_INFERENCE_ERROR_LOG_INTERVAL = 10.0
 _DEFAULT_SPEECH_HOLD_DURATION = 0.25
 _DEFAULT_MINIMUM_SPEECH_DURATION = 0.05
 _MISSING_METADATA_WARNING_FRAMES = 10
@@ -75,6 +77,8 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         self._processing_backlog = 0.0
         self._slow_warning_active = False
         self._last_slow_warning = 0.0
+        self._failed_blocks = 0
+        self._last_inference_error_log = -math.inf
 
     @property
     def enabled(self) -> bool:
@@ -102,6 +106,8 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         self._prediction_delay_samples = 0
         self._processing_backlog = 0.0
         self._slow_warning_active = False
+        self._failed_blocks = 0
+        self._last_inference_error_log = -math.inf
 
     def _on_stream_info_updated(
         self,
@@ -174,12 +180,31 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             started = time.perf_counter()
             try:
                 native_vad.process(_pcm16_to_float32(memoryview(pcm)))
+                probability = context.raw_vad_probability()
+                detected = context.is_speech_detected()
             except Exception as error:
-                raise RuntimeError(
-                    "ai-coustics VAD inference failed "
-                    f"(model={self._model_id}, sample_rate={frame.sample_rate}, "
-                    f"block_size={inference_block_size}): {error}"
-                ) from error
+                # LiveKit does not restart a failed VAD stream. A failed block is silence,
+                # so the stream continues and speech ends if the failures continue.
+                probability = 0.0
+                detected = False
+                self._failed_blocks += 1
+                failed = time.perf_counter()
+                if failed - self._last_inference_error_log >= _INFERENCE_ERROR_LOG_INTERVAL:
+                    fields = self._diagnostic_fields(
+                        error_type=type(error).__name__,
+                        error_message=str(error),
+                        failed_blocks=self._failed_blocks,
+                    )
+                    # These records can repeat for the full session. Do not keep user data in them.
+                    fields.pop("participant_identity", None)
+                    fields.pop("room_name", None)
+                    logger.error(
+                        "VAD: inference failed; treating the block as silence",
+                        extra=fields,
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
+                    self._last_inference_error_log = failed
+                    self._failed_blocks = 0
             completed = time.perf_counter()
             inference_duration = completed - started
             block_duration = inference_block_size / frame.sample_rate
@@ -192,8 +217,8 @@ class VADProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 _InferenceResult(
                     pcm=pcm,
                     sample_rate=frame.sample_rate,
-                    probability=context.raw_vad_probability(),
-                    detected=context.is_speech_detected(),
+                    probability=probability,
+                    detected=detected,
                     sensitivity=context.get_parameter(aic_sdk.VadParameter.Sensitivity),
                     speech_hold_duration=context.get_parameter(
                         aic_sdk.VadParameter.SpeechHoldDuration
