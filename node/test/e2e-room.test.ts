@@ -28,7 +28,7 @@ const livekitUrl = process.env.LIVEKIT_URL ?? "ws://127.0.0.1:7880";
 const livekitApiKey = process.env.LIVEKIT_API_KEY ?? "devkey";
 const livekitApiSecret = process.env.LIVEKIT_API_SECRET ?? "secret";
 const vadModelId =
-  process.env.AIC_INTEGRATION_VAD_MODEL_ID ?? "vad-2.1-xxs-16khz";
+  process.env.AIC_INTEGRATION_VAD_MODEL_ID ?? "vad-ms-2.1-xxs-16khz";
 const modelDir =
   process.env.AIC_INTEGRATION_MODEL_DIR ??
   path.join(os.homedir(), ".cache", "aic-sdk", "models");

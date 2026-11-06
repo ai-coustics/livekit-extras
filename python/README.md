@@ -48,8 +48,8 @@ Download models during deployment or container setup:
 ```python
 from ai_coustics.livekit import Model
 
-vad_path = Model.download("vad-2.1-xxs-16khz", "./models")
-analysis_path = Model.download("tyto-1.1-l-16khz", "./models")
+vad_path = Model.download("vad-ms-2.1-xxs-16khz", "./models")
+analysis_path = Model.download("tyto-1.2-l-16khz", "./models")
 ```
 
 VAD and analysis models are different model types. Make the returned paths available to your

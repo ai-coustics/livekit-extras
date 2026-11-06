@@ -47,8 +47,8 @@ Download models during deployment or container setup:
 ```ts
 import { Model } from "@ai-coustics/livekit-extras";
 
-const vadPath = await Model.download("vad-2.1-xxs-16khz", "./models");
-const analysisPath = await Model.download("tyto-1.1-l-16khz", "./models");
+const vadPath = await Model.download("vad-ms-2.1-xxs-16khz", "./models");
+const analysisPath = await Model.download("tyto-1.2-l-16khz", "./models");
 ```
 
 VAD and analysis models are different model types. Make the returned paths available to your

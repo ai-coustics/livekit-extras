@@ -12,9 +12,9 @@ initializeLogger({ pretty: false, level: "silent" });
 
 const describeIf = process.env.AIC_SDK_LICENSE ? describe : describe.skip;
 const vadModelId =
-  process.env.AIC_INTEGRATION_VAD_MODEL_ID ?? "vad-2.1-xxs-16khz";
+  process.env.AIC_INTEGRATION_VAD_MODEL_ID ?? "vad-ms-2.1-xxs-16khz";
 const analysisModelId =
-  process.env.AIC_INTEGRATION_ANALYSIS_MODEL_ID ?? "tyto-1.1-l-16khz";
+  process.env.AIC_INTEGRATION_ANALYSIS_MODEL_ID ?? "tyto-1.2-l-16khz";
 const modelDir =
   process.env.AIC_INTEGRATION_MODEL_DIR ??
   path.join(os.homedir(), ".cache", "aic-sdk", "models");

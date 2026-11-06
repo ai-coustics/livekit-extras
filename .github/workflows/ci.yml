@@ -36,8 +36,8 @@ jobs:
     timeout-minutes: 15
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     env:
-      AIC_INTEGRATION_VAD_MODEL_ID: vad-2.1-xxs-16khz
-      AIC_INTEGRATION_ANALYSIS_MODEL_ID: tyto-1.1-l-16khz
+      AIC_INTEGRATION_VAD_MODEL_ID: vad-ms-2.1-xxs-16khz
+      AIC_INTEGRATION_ANALYSIS_MODEL_ID: tyto-1.2-l-16khz
       LIVEKIT_URL: ws://127.0.0.1:7880
       LIVEKIT_API_KEY: devkey
       LIVEKIT_API_SECRET: secret
@@ -111,7 +111,7 @@ jobs:
     timeout-minutes: 15
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     env:
-      AIC_INTEGRATION_ANALYSIS_MODEL_ID: tyto-1.1-l-16khz
+      AIC_INTEGRATION_ANALYSIS_MODEL_ID: tyto-1.2-l-16khz
       LIVEKIT_URL: ws://127.0.0.1:7880
       LIVEKIT_API_KEY: devkey
       LIVEKIT_API_SECRET: secret
