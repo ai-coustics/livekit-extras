@@ -15,8 +15,8 @@ from ai_coustics import livekit as ai_coustics
 pytestmark = pytest.mark.integration
 
 LICENSE = os.getenv("AIC_SDK_LICENSE")
-VAD_MODEL_ID = os.getenv("AIC_INTEGRATION_VAD_MODEL_ID", "vad-2.1-xxs-16khz")
-ANALYSIS_MODEL_ID = os.getenv("AIC_INTEGRATION_ANALYSIS_MODEL_ID", "tyto-1.1-l-16khz")
+VAD_MODEL_ID = os.getenv("AIC_INTEGRATION_VAD_MODEL_ID", "vad-ms-2.1-xxs-16khz")
+ANALYSIS_MODEL_ID = os.getenv("AIC_INTEGRATION_ANALYSIS_MODEL_ID", "tyto-1.2-l-16khz")
 MODEL_DIR = Path(os.getenv("AIC_INTEGRATION_MODEL_DIR", "~/.cache/aic-sdk/models")).expanduser()
 SAMPLE_RATE = 16000
 SAMPLES_PER_FRAME = 800  # LiveKit Agents' current 50 ms default input frame.

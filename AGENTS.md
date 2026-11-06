@@ -8,10 +8,10 @@ Two independently built packages that are functional mirrors of each other:
 
 - `python/` — `ai-coustics-livekit-extras`, importable as `ai_coustics.livekit` (package under
   `python/src/ai_coustics/livekit/`; `ai_coustics` is a PEP 420 namespace with no `__init__.py`),
-  built on `aic-sdk` 3.3.
-- `node/` — `@ai-coustics/livekit-extras` (`node/src/`), built on `@ai-coustics/aic-sdk` 0.25.
+  built on `aic-sdk` 3.4.
+- `node/` — `@ai-coustics/livekit-extras` (`node/src/`), built on `@ai-coustics/aic-sdk` 0.26.
 
-Both SDK versions are built on ai-coustics core 0.25.2.
+Both SDK versions are built on ai-coustics core 0.26.0.
 
 Run all commands from inside `python/` or `node/`; there is no root-level build. The two packages
 are released in lockstep and must always carry the same version.
@@ -48,7 +48,7 @@ npm run build                                     # tsup -> dist
 or CI will not run it.
 
 Test environment: `AIC_SDK_LICENSE` is required for integration and e2e (those suites skip without
-it rather than fail). Models default to `vad-2.1-xxs-16khz` and `tyto-1.1-l-16khz`, overridable
+it rather than fail). Models default to `vad-ms-2.1-xxs-16khz` and `tyto-1.2-l-16khz`, overridable
 via `AIC_INTEGRATION_VAD_MODEL_ID`, `AIC_INTEGRATION_ANALYSIS_MODEL_ID`,
 `AIC_INTEGRATION_MODEL_DIR`. E2E needs a LiveKit server —
 `livekit-server --dev` (or the pinned `livekit/livekit-server:v1.13.1` container) with the dev
