@@ -26,6 +26,7 @@ const DEFAULT_PREFIX_PADDING_DURATION_MS = 500;
 const DEFAULT_MAX_BUFFERED_SPEECH_MS = 60_000;
 const SLOW_INFERENCE_BACKLOG_THRESHOLD_MS = 200;
 const SLOW_WARNING_INTERVAL_MS = 10_000;
+const INFERENCE_ERROR_LOG_INTERVAL_MS = 10_000;
 const MISSING_METADATA_WARNING_FRAMES = 10;
 
 export interface VADParameters {
@@ -73,6 +74,8 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
   private processingBacklogMs = 0;
   private slowWarningActive = false;
   private lastSlowWarning = 0;
+  private failedBlocks = 0;
+  private lastInferenceErrorLog = -Infinity;
   private streamInfo: FrameProcessorStreamInfo | null = null;
 
   constructor(model: Model, licenseKey: string) {
@@ -146,6 +149,8 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
     this.predictionDelaySamples = 0;
     this.processingBacklogMs = 0;
     this.slowWarningActive = false;
+    this.failedBlocks = 0;
+    this.lastInferenceErrorLog = -Infinity;
   }
 
   close(): void {
@@ -191,15 +196,32 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
       const pcm = this.inferenceBuffer.slice(0, inferenceBlockSize);
       this.inferenceBuffer = this.inferenceBuffer.slice(inferenceBlockSize);
       const started = performance.now();
+      let probability: number;
+      let detected: boolean;
       try {
         nativeVad.process(pcm16ToFloat32(pcm));
+        probability = context.getRawVadProbability();
+        detected = context.isSpeechDetected();
       } catch (error) {
-        throw new Error(
-          `ai-coustics VAD inference failed (model=${this.modelId}, ` +
-            `sampleRate=${frame.sampleRate}, blockSize=${inferenceBlockSize}): ` +
-            errorDetail(error),
-          { cause: error },
-        );
+        // LiveKit does not restart a failed VAD stream. A failed block is silence,
+        // so the stream continues and speech ends if the failures continue.
+        probability = 0;
+        detected = false;
+        this.failedBlocks += 1;
+        const failed = performance.now();
+        if (failed - this.lastInferenceErrorLog >= INFERENCE_ERROR_LOG_INTERVAL_MS) {
+          const fields = this.diagnosticFields({
+            errorType: error instanceof Error ? error.name : typeof error,
+            errorMessage: errorDetail(error),
+            failedBlocks: this.failedBlocks,
+          });
+          // These records can repeat for the full session. Do not keep user data in them.
+          delete fields.participantIdentity;
+          delete fields.roomName;
+          writeLog("error", "vad", "inference failed; treating the block as silence", fields, error);
+          this.lastInferenceErrorLog = failed;
+          this.failedBlocks = 0;
+        }
       }
       const completed = performance.now();
       const inferenceDurationMs = completed - started;
@@ -211,8 +233,8 @@ export class VADProcessor extends FrameProcessor<AudioFrame> {
       results.push({
         pcm,
         sampleRate: frame.sampleRate,
-        probability: context.getRawVadProbability(),
-        detected: context.isSpeechDetected(),
+        probability,
+        detected,
         sensitivity: context.getParameter(AicVadParameter.Sensitivity),
         speechHoldDuration: context.getParameter(
           AicVadParameter.SpeechHoldDuration,

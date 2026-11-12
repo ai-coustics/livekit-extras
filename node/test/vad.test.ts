@@ -89,7 +89,7 @@ const sdk = vi.hoisted(() => {
     readonly context = new FakeContext();
     readonly initializations: Array<[number, number, boolean]> = [];
     readonly blocks: number[][] = [];
-    readonly predictions: Array<[number, boolean]> = [];
+    readonly predictions: Array<[number, boolean] | null> = [];
     initializeError: Error | null = null;
     processError: Error | null = null;
     terminateCalls = 0;
@@ -109,6 +109,7 @@ const sdk = vi.hoisted(() => {
       if (this.processError) throw this.processError;
       this.blocks.push(Array.from(block));
       const prediction = this.predictions.shift();
+      if (prediction === null) throw new Error("injected inference failure");
       if (prediction) {
         [this.context.probability, this.context.detected] = prediction;
       }
@@ -152,7 +153,7 @@ interface Scenario {
   vad_parameters?: Record<string, number>;
   prefix_padding_duration?: number;
   max_buffered_speech?: number;
-  predictions: Array<[number, boolean]>;
+  predictions: Array<[number, boolean] | null>;
   event_types?: string[];
   logs?: Array<{ message: string; count: number }>;
   events: Array<Record<string, unknown>>;
@@ -597,7 +598,9 @@ describe("VAD", () => {
     expect(native.terminateCalls).toBe(0);
   });
 
-  it("adds model and audio-format context to inference errors", async () => {
+  it("logs inference errors with a rate limit and keeps the stream running", async () => {
+    let clock = 100_000;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
     const vad = new VAD({
       model: new sdk.FakeModel(),
       licenseKey: "test-license",
@@ -606,13 +609,28 @@ describe("VAD", () => {
     const native = sdk.instances[0]!;
     native.processError = new Error("native failure");
     const errorLog = vi.spyOn(log(), "error");
-    pushProcessed(vad, stream, makeFrame(new Int16Array(480), 48_000));
 
-    await expect(collectEvents(stream)).rejects.toThrow(
-      "ai-coustics VAD inference failed (model=vad-test-model, sampleRate=48000, blockSize=480): native failure",
-    );
+    pushProcessed(vad, stream, makeFrame(new Int16Array(1440), 48_000));
+    clock += 10_000;
+    pushProcessed(vad, stream, makeFrame(new Int16Array(480), 48_000));
+    native.processError = null;
+    native.predictions.push([0.9, true]);
+    pushProcessed(vad, stream, makeFrame(new Int16Array(480), 48_000));
+    const events = await collectEvents(stream);
+
+    expect(
+      events
+        .filter((event) => event.type === VADEventType.INFERENCE_DONE)
+        .map((event) => event.probability),
+    ).toEqual([0, 0, 0, 0, 0.9]);
     expect(native.terminateCalls).toBe(0);
-    expect(errorLog).toHaveBeenCalledWith(
+    const failures = errorLog.mock.calls.filter(
+      ([, message]) => message === "VAD: inference failed; treating the block as silence",
+    );
+    expect(
+      failures.map(([fields]) => (fields as unknown as { failedBlocks: number }).failedBlocks),
+    ).toEqual([1, 3]);
+    expect(failures[0]![0]).toEqual(
       expect.objectContaining({
         plugin: "ai-coustics",
         component: "vad",
@@ -621,12 +639,12 @@ describe("VAD", () => {
         sampleRate: 48_000,
         blockSize: 480,
         errorType: "Error",
-        errorMessage: expect.stringContaining("native failure"),
+        errorMessage: "native failure",
         error: expect.any(Error),
       }),
-      "VAD: stream failed",
     );
     errorLog.mockRestore();
+    now.mockRestore();
   });
 
   it.each([
