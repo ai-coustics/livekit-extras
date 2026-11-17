@@ -1,6 +1,6 @@
 # ai-coustics LiveKit extras for Node.js
 
-Voice activity detection and Tyto analysis for LiveKit Agents, backed by the
+Voice activity detection and the Tyto Audio Decision Model for LiveKit Agents, backed by the
 `@ai-coustics/aic-sdk` package.
 
 > [!IMPORTANT]
@@ -14,7 +14,7 @@ Voice activity detection and Tyto analysis for LiveKit Agents, backed by the
 | --- | --- | --- |
 | Speech Enhancement | No | Yes |
 | Voice Activity Detection (`VAD`) | Dedicated Models | Legacy |
-| Tyto analysis (`Analyzer`) | Yes | No |
+| Audio Decision Model (Tyto `Analyzer`) | Yes | No |
 
 ## Installation
 
@@ -90,10 +90,10 @@ await session.start({
 streams read the immutable metadata it attaches to each frame, so the SDK model runs only once per
 audio block.
 
-### Tyto analysis
+### Audio Decision Model
 
-[Tyto](https://docs.ai-coustics.com/models/audio-insight/tyto), the ai-coustics audio decision
-model, scores the user's audio during the call so your agent can act on the results.
+[Tyto](https://docs.ai-coustics.com/models/audio-insight/tyto), the ai-coustics Audio Decision
+Model, scores the user's audio during the call so your agent can act on the results.
 
 Create an `Analyzer`, install its collector in RoomIO's audio path, and subscribe to its results:
 
