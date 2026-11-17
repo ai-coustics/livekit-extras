@@ -6,7 +6,7 @@ ai-coustics SDKs and let LiveKit agents use:
 
 - `VAD` for voice activity detection with a dedicated SDK VAD model, through `vad.processor` and
   LiveKit's streaming VAD interface.
-- `Analyzer` for periodic Audio Insight analysis.
+- `Analyzer` for periodic analysis with Tyto, the ai-coustics Audio Decision Model.
 - `FrameProcessorChain` for applying any number of frame processors in sequence.
 
 Applications choose and provision the SDK models themselves. This keeps model selection, storage,
@@ -24,7 +24,7 @@ lifecycle, observability, and error recovery.
 | --- | --- | --- |
 | Speech Enhancement | No | Yes |
 | Voice Activity Detection (`VAD`) | Dedicated Models | Legacy |
-| Audio Insight (Tyto `Analyzer`) | Yes | No |
+| Audio Decision Model (Tyto `Analyzer`) | Yes | No |
 
 ## Packages
 
